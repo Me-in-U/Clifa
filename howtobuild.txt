@@ -1,0 +1,8 @@
+py -3.10 -m pip install pyinstaller
+
+py -3.10 -m PyInstaller --noconsole --onefile ^
+  --name ClipFAISSLauncher ^
+  --add-data "requirements.txt;." ^
+  --add-data "main.py;." ^
+  --add-data "app;app" ^
+  launch.py
