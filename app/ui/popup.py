@@ -16,6 +16,7 @@ class PopupWindow(QtWidgets.QWidget):
     request_search = QtCore.Signal(str, int)
     request_open = QtCore.Signal(str)
     request_settings = QtCore.Signal()
+    request_cancel = QtCore.Signal()
 
     def __init__(self):
         super().__init__(
@@ -87,6 +88,7 @@ class PopupWindow(QtWidgets.QWidget):
         # 오버레이
         self.overlay = SpinnerOverlay(self.card)
         self.overlay.hide()
+        self.overlay.cancel_clicked.connect(self.request_cancel.emit)
 
         # 연결
         self.btnSearch.clicked.connect(self._emit_search)
@@ -120,16 +122,24 @@ class PopupWindow(QtWidgets.QWidget):
         self.raise_()
         self.activateWindow()
         enable_windows_blur(self.card, acrylic=True, opacity=180, color=(255, 255, 255))
+        self.overlay.setGeometry(self.card.rect())
 
-    def set_progress(self, v: int):
-        v = max(0, min(100, int(v)))
-        if v >= 100:
-            self.overlay.hide()
+    # set_progress 교체: 위젯 show/hide + 값 갱신
+    def set_progress(self, percent, done: int, total: int):
+        # 퍼센트는 float 그대로 전달(0.00% 포맷은 Overlay가 처리)
+        self.overlay.set_progress(percent, done, total)
+
+        # show/hide만 제어(카운트/퍼센트는 항상 업데이트)
+        try:
+            fv = float(percent)
+        except Exception:
+            fv = 0.0
+        if fv >= 100.0:
+            if self.overlay.isVisible():
+                self.overlay.hide()
         else:
             if not self.overlay.isVisible():
                 self.overlay.show()
-            self.overlay.set_percent(v)
-        QtWidgets.QApplication.processEvents()
 
     def set_results(self, root: Path, results: List[str]):
         self.list.clear()

@@ -7,8 +7,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ultralytics.utils.torch_utils import select_device
 
 from app.search.visual_ai import VisualAISearchWithProgress
-from app.search.worker import AutoIndexWorker
+from app.search.worker import AutoIndexWorker, CancelToken, InitIndexWorker
 from app.ui.settings import SettingsDialog
+from ultralytics.data.utils import IMG_FORMATS
 
 
 class AppController(QtCore.QObject):
@@ -19,7 +20,9 @@ class AppController(QtCore.QObject):
         self.ui = ui
         self.pool = QtCore.QThreadPool.globalInstance()
         self.searcher: VisualAISearchWithProgress | None = None
-
+        self.cancel_token = None
+        self._indexing_busy = False
+        self._autoindex_blocked = False
         # settings에서 루트 복원
         st = QtCore.QSettings()
         root = st.value("last_root_dir", "", type=str)
@@ -40,29 +43,35 @@ class AppController(QtCore.QObject):
         self.ui.request_search.connect(self.on_search)
         self.ui.request_open.connect(self.open_file)
         self.ui.request_settings.connect(self.open_settings)
+        self.ui.request_cancel.connect(self.cancel_indexing)
 
         # 시작 시 인덱스 확인/로드
         QtCore.QTimer.singleShot(0, self._boot_index_check)
 
     # 진행률
-    @QtCore.Slot(int)
-    def _on_progress(self, v: int):
-        self.ui.set_progress(v)
+    @QtCore.Slot(float, int, int)
+    def _on_progress(self, percent: float, done: int, total: int):
+        self.ui.set_progress(percent, done, total)
 
     def _boot_index_check(self):
-        self.ui.set_progress(0)
+        def _has_images(path: Path) -> bool:
+            try:
+                for f in path.rglob("*"):
+                    if f.is_file() and f.suffix.lower().lstrip(".") in IMG_FORMATS:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        self.ui.set_progress(0.0, 0, 0)
         # 기본 디렉토리 검증
-        if (
-            not self.root_path.exists()
-            or not any(self.root_path.glob("*.jpg"))
-            and not any(self.root_path.glob("*.png"))
-        ):
+        if not self.root_path.exists() or not _has_images(self.root_path):
             QtWidgets.QMessageBox.information(
                 self.ui,
                 "알림",
                 f"기본 이미지 폴더({self.root_path})가 비어있거나 존재하지 않습니다.\n설정에서 이미지 폴더를 지정하세요.",
             )
-            self.ui.set_progress(100)  # 스피너 멈춤
+            self.ui.set_progress(100.0, 0, 0)  # 스피너 멈춤
             self.open_settings()  # 바로 설정창 열기
             return  # 인덱싱 중단
 
@@ -70,19 +79,43 @@ class AppController(QtCore.QObject):
             device = select_device("0" if torch.cuda.is_available() else "cpu")
 
             self.searcher = VisualAISearchWithProgress(
-                data=str(self.root_path), device=device, progress_cb=self._on_progress
+                data=str(self.root_path),
+                device=device,
+                progress_cb=self._on_progress,
+                defer_build=True,  # ✅ 생성 가볍게
             )
 
             self._setup_watcher(self.root_path)
 
-            worker = AutoIndexWorker(self.searcher)
-            worker.signals.progress.connect(self._on_progress)
-            worker.signals.done.connect(self._on_autoindex_done)
-            worker.signals.error.connect(self._on_autoindex_error)
-            self.pool.start(worker)
+            # ✅ 초기 전체 빌드는 전용 워커로
+            self.cancel_token = CancelToken()
+            self._indexing_busy = True
+            init = InitIndexWorker(self.searcher, self.cancel_token)
+            init.signals.progress.connect(self._on_progress_token)
+            init.signals.done.connect(self._on_done_token)
+            init.signals.error.connect(self._on_error_token)
+            init.signals.cancelled.connect(self._on_autoindex_cancelled)
+            self.pool.start(init)
         except Exception as e:
             # 이미지 없음/읽기 실패 같은 경우를 안내
             QtWidgets.QMessageBox.critical(self.ui, "인덱스 로드/생성 실패", f"{e}\n\n")
+
+    @QtCore.Slot(float, int, int)
+    def _on_progress_token(self, pct: float, done: int, total: int):
+        self.ui.set_progress(pct, done, total)
+
+    @QtCore.Slot(int)
+    def _on_done_token(self, added_or_total: int):
+        if added_or_total > 0:
+            QtWidgets.QToolTip.showText(
+                QtGui.QCursor.pos(), f"신규 {added_or_total}개 반영"
+            )
+            self.ui.set_progress(100.0, 0, 0)
+
+    @QtCore.Slot(str)
+    def _on_error_token(self, msg: str):
+        QtWidgets.QMessageBox.critical(self.ui, "인덱싱 실패", msg)
+        self.ui.set_progress(100.0, 0, 0)
 
     # 감시 경로 구성
     def _setup_watcher(self, root: Path):
@@ -105,37 +138,30 @@ class AppController(QtCore.QObject):
 
     # 디바운스 만료 → 자동 인덱싱
     def _on_fs_debounced(self):
-        if not self.searcher:
+        if not self.searcher or self._autoindex_blocked or self._indexing_busy:
             return
-        self._setup_watcher(self.root_path)
-        worker = AutoIndexWorker(self.searcher)
+        self.cancel_token = CancelToken()
+        self._indexing_busy = True
+        worker = AutoIndexWorker(self.searcher, self.cancel_token)
         worker.signals.progress.connect(self._on_progress)
         worker.signals.done.connect(self._on_autoindex_done)
         worker.signals.error.connect(self._on_autoindex_error)
+        worker.signals.cancelled.connect(self._on_autoindex_cancelled)  # ✅
         self.pool.start(worker)
-
-    @QtCore.Slot(int)
-    def _on_autoindex_done(self, added: int):
-        if added > 0:
-            QtWidgets.QToolTip.showText(
-                QtGui.QCursor.pos(), f"신규 {added}개 자동 반영 완료"
-            )
-        self.ui.set_progress(100)
-
-    @QtCore.Slot(str)
-    def _on_autoindex_error(self, msg: str):
-        QtWidgets.QMessageBox.critical(self.ui, "자동 인덱싱 실패", msg)
-        self.ui.set_progress(100)
 
     # 트레이 메뉴용 수동 인덱싱
     @QtCore.Slot()
     def manual_index(self):
         if not self.searcher:
             return
-        worker = AutoIndexWorker(self.searcher)
+        self.cancel_indexing()
+        self.cancel_token = CancelToken()  # ✅
+        self._indexing_busy = True
+        worker = AutoIndexWorker(self.searcher, self.cancel_token)  # ✅ 토큰 전달
         worker.signals.progress.connect(self._on_progress)
         worker.signals.done.connect(self._on_autoindex_done)
         worker.signals.error.connect(self._on_autoindex_error)
+        worker.signals.cancelled.connect(self._on_autoindex_cancelled)
         self.pool.start(worker)
 
     # 검색
@@ -165,16 +191,22 @@ class AppController(QtCore.QObject):
     # 설정
     @QtCore.Slot()
     def open_settings(self):
-        dlg = SettingsDialog(self.ui)
-        dlg.root_changed.connect(self._on_root_changed)
-        dlg.exec()
+        # 인덱싱 중이면 취소
+        self.cancel_indexing()  # ✅
+        self._autoindex_blocked = True  # ✅ 자동 인덱싱 잠금
+        try:
+            dlg = SettingsDialog(self.ui)
+            dlg.root_changed.connect(self._on_root_changed)
+            dlg.exec()
+        finally:
+            self._autoindex_blocked = False  # ✅ 해제
 
     @QtCore.Slot(str)
     def _on_root_changed(self, new_root: str):
         self.root_path = Path(new_root)
 
         # 1) 스피너 보이기
-        self.ui.set_progress(0)
+        self.ui.set_progress(0.0, 0, 0)
 
         # 2) 비모달 정보 팝업 (스피너/메인 UI 동작 방해 X)
         m = QtWidgets.QMessageBox(self.ui)
@@ -191,22 +223,63 @@ class AppController(QtCore.QObject):
         def _start():
             try:
                 device = select_device("0" if torch.cuda.is_available() else "cpu")
-                # ⚠️ 생성자에서 인덱스 빌드가 수행되는 구조이므로 지연 호출
                 self.searcher = VisualAISearchWithProgress(
                     data=str(self.root_path),
                     device=device,
                     progress_cb=self._on_progress,
+                    defer_build=True,  # ✅ 생성 가볍게
                 )
                 self._setup_watcher(self.root_path)
 
-                # 백그라운드 자동 인덱싱
-                worker = AutoIndexWorker(self.searcher)
-                worker.signals.progress.connect(self._on_progress)
-                worker.signals.done.connect(self._on_autoindex_done)
-                worker.signals.error.connect(self._on_autoindex_error)
-                self.pool.start(worker)
+                # 진행 중 작업 취소 + 새 토큰으로 교체
+                self.cancel_indexing()  # 이전 작업 중단 요청
+                self.cancel_token = CancelToken()  # ✅ 반드시 새 토큰 생성
+                self._indexing_busy = True
+
+                # ✅ 초기 전체 빌드는 전용 워커로 (UI 비블로킹)
+                init = InitIndexWorker(self.searcher, self.cancel_token)
+                init.signals.progress.connect(self._on_progress)
+                init.signals.done.connect(self._on_autoindex_done)
+                init.signals.error.connect(self._on_autoindex_error)
+                init.signals.cancelled.connect(self._on_autoindex_cancelled)
+                self.pool.start(init)
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self.ui, "인덱스 재생성 실패", str(e))
-                self.ui.set_progress(100)
+                self.ui.set_progress(100.0, 0, 0)
 
-        QtCore.QTimer.singleShot(50, _start)  # 50ms 정도만 지연해도 충분
+        QtCore.QTimer.singleShot(150, _start)  # 150ms 정도만 지연해도 충분
+
+    @QtCore.Slot()
+    def cancel_indexing(self):  # ✅ 취소 API
+        if self.cancel_token:
+            self.cancel_token.cancel()
+
+    @QtCore.Slot(int)
+    def _on_autoindex_done(self, added: int):
+        self._indexing_busy = False
+        if added > 0:
+            QtWidgets.QToolTip.showText(
+                QtGui.QCursor.pos(), f"신규 {added}개 자동 반영 완료"
+            )
+        self.ui.set_progress(100.0, 0, 0)
+
+    @QtCore.Slot(str)
+    def _on_autoindex_error(self, msg: str):
+        box = QtWidgets.QMessageBox(self.ui)
+        box.setIcon(QtWidgets.QMessageBox.Critical)
+        box.setWindowTitle("자동 인덱싱 실패")
+        # 첫 줄은 본문, 전체는 Details 로
+        first = (msg or "").strip().splitlines()
+        box.setText(first[0] if first else "예외가 발생했지만 메시지가 없습니다.")
+        box.setDetailedText(msg or "")
+        # 텍스트 복사/선택 가능
+        box.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
+        box.exec()
+        self.ui.set_progress(100.0, 0, 0)
+
+    @QtCore.Slot()
+    def _on_autoindex_cancelled(self):
+        self._indexing_busy = False
+        self.ui.set_progress(100.0, 0, 0)

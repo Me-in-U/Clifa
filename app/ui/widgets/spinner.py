@@ -38,6 +38,8 @@ class Spinner(QtWidgets.QWidget):
 class SpinnerOverlay(QtWidgets.QWidget):
     """카드 위를 덮는 반투명 오버레이 + 중앙 스피너 + %"""
 
+    cancel_clicked = QtCore.Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(
@@ -57,17 +59,58 @@ class SpinnerOverlay(QtWidgets.QWidget):
         v.setAlignment(QtCore.Qt.AlignCenter)
         v.setSpacing(10)
 
+        # 스피너
         self.spinner = Spinner(56, inner)
+
+        # % 라벨
         self.lab = QtWidgets.QLabel("0 %", inner)
         self.lab.setStyleSheet(
             "color: rgba(255,255,255,230); font-size: 18px; font-weight: 600;"
         )
+
+        # 현재/전체 라벨
+        self.labCount = QtWidgets.QLabel("0/0", inner)
+        self.labCount.setStyleSheet(
+            "color: rgba(255,255,255,220); font-size: 13px; font-weight: 500;"
+        )
+        # 취소 버튼
+        self.btnCancel = QtWidgets.QPushButton("취소", inner)
+        self.btnCancel.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.btnCancel.setFixedWidth(96)
+        self.btnCancel.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,230); border:1px solid #bbb; "
+            "border-radius:8px; padding:6px 10px;}"
+            "QPushButton:hover{background:rgba(245,245,245,230);}"
+        )
+
+        # 레이아웃 배치
         v.addWidget(self.spinner, 0, QtCore.Qt.AlignHCenter)
         v.addWidget(self.lab, 0, QtCore.Qt.AlignHCenter)
+        v.addWidget(self.labCount, 0, QtCore.Qt.AlignHCenter)
+        v.addWidget(self.btnCancel, 0, QtCore.Qt.AlignHCenter)
         lay.addWidget(inner)
 
-    def set_percent(self, v: int):
-        self.lab.setText(f"{max(0, min(100, int(v)))} %")
+        # 시그널 연결
+        self.btnCancel.clicked.connect(self.cancel_clicked.emit)
+
+    def set_percent(self, v):
+        # float 허용 + 0.00% 포맷
+        try:
+            fv = float(v)
+        except Exception:
+            fv = 0.0
+        fv = max(0.0, min(100.0, fv))
+        self.lab.setText(f"{fv:.2f} %")
+
+    # 추가: 현재/전체 세터
+    def set_counts(self, done: int, total: int):
+        self.labCount.setText(f"{done}/{total}")
+
+    # 한 번에 업데이트
+    def set_progress(self, v, done: int, total: int):
+        # 퍼센트/카운트 항상 동시에 업데이트
+        self.set_percent(v)
+        self.set_counts(int(done), int(total))
 
     def paintEvent(self, _):
         p = QtGui.QPainter(self)
