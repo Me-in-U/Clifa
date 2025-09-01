@@ -138,7 +138,7 @@ class VisualAISearchWithProgress(QtCore.QObject):
             except Exception:
                 pass
             if self.progress_cb and total:
-                pct = int(i * 100 / total)
+                pct = i * 100.0 / total
                 self.progress_cb(pct, i, total)
 
         if cancel_token and cancel_token.is_cancelled():
@@ -212,7 +212,7 @@ class VisualAISearchWithProgress(QtCore.QObject):
             except Exception:
                 pass
             if progress:
-                pct = int(i * 100 / total)
+                pct = i * 100.0 / total
                 progress(pct, i, total)
 
         if self.progress_cb:
