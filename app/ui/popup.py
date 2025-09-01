@@ -129,14 +129,18 @@ class PopupWindow(QtWidgets.QWidget):
         # 퍼센트는 float 그대로 전달(0.00% 포맷은 Overlay가 처리)
         self.overlay.set_progress(percent, done, total)
 
-        # show/hide만 제어(카운트/퍼센트는 항상 업데이트)
+        # 완료 임계값 여유 (99.995 이상이면 100.00%로 표기되는 값)
         try:
             fv = float(percent)
         except Exception:
             fv = 0.0
-        if fv >= 100.0:
+        if fv >= 99.995:
+            # ✅ 강제 hide (isVisible 검사 없이)
             if self.overlay.isVisible():
                 self.overlay.hide()
+            else:
+                # 혹시 다음 이벤트 루프에서 다시 show되는 경쟁을 방지
+                QtCore.QTimer.singleShot(0, self.overlay.hide)
         else:
             if not self.overlay.isVisible():
                 self.overlay.show()

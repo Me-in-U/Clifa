@@ -1,19 +1,35 @@
 import hashlib
+import logging
 import os
+import re
+import sys
+import unicodedata
 from pathlib import Path
-from PIL import Image
 from typing import List
 
 import numpy as np
 import torch
+from PIL import Image
 from PySide6 import QtCore
 from ultralytics.nn.text_model import build_text_model
 from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.torch_utils import select_device
 
+LOCAL_BASE = (
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+    / "ClipFAISS"
+)
+LOG_DIR = LOCAL_BASE / "logs"
+LOG_FILE = LOG_DIR / "visual_ai.log"
 
-import re
-import unicodedata
+logging.basicConfig(
+    level=logging.DEBUG,  # DEBUG/INFO/WARNING/ERROR
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
 
 
 def _slugify_path(p: Path) -> str:
@@ -51,6 +67,7 @@ class VisualAISearchWithProgress(QtCore.QObject):
         defer_build: bool = False,
     ):
         super().__init__()
+        self.logger = logging.getLogger("clipfaiss.visual_ai")
         self.progress_cb = progress_cb
 
         # === 디바이스 선택(자동) ===
@@ -76,6 +93,9 @@ class VisualAISearchWithProgress(QtCore.QObject):
                 f.write(b"ok")
             testfile.unlink(missing_ok=True)
         except Exception as e:
+            self.logger.error(
+                f"[Index] 디렉터리 접근 실패: {self.index_dir}\n원인: {e!r}"
+            )
             raise RuntimeError(
                 f"인덱스 디렉터리에 쓸 수 없습니다: {self.index_dir}\n원인: {e!r}"
             )
@@ -118,6 +138,9 @@ class VisualAISearchWithProgress(QtCore.QObject):
         if Path(self.faiss_index).exists() and Path(self.data_path_npy).exists():
             self.index = self.faiss.read_index(self.faiss_index)
             self.image_paths = np.load(self.data_path_npy)
+            self.logger.info(
+                f"[VisualAI] 인덱스/경로 로드됨: {self.index_dir} ({len(self.image_paths)}개)"
+            )
             # 진행 UI 동기화 (있다면)
             if progress_cb:
                 total = len(self.image_paths)
@@ -142,13 +165,14 @@ class VisualAISearchWithProgress(QtCore.QObject):
                 self.progress_cb(pct, i, total)
 
         if cancel_token and cancel_token.is_cancelled():
+            self.logger.warning(f"[VisualAI] 인덱싱 중단됨: {self.data_dir}")
             raise IndexCancelled()  # ✅ 마지막 체크
 
         if self.progress_cb:
             self.progress_cb(100.0, total, total)
 
         if not vectors:
-            print("[VisualAI] No images found in", self.data_dir)
+            self.logger.warning(f"[VisualAI] No images found in {self.data_dir}")
             self.index = None
             self.image_paths = np.array([])
             if self.progress_cb:
@@ -165,6 +189,9 @@ class VisualAISearchWithProgress(QtCore.QObject):
         try:
             self.faiss.write_index(self.index, self.faiss_index)
         except Exception as e:
+            self.logger.error(
+                f"[VisualAI] FAISS 인덱스 저장 실패: {self.faiss_index}\n원인: {e!r}"
+            )
             raise RuntimeError(
                 f"FAISS 인덱스 저장 실패: '{self.faiss_index}'\n"
                 f"루트: '{self.data_dir}'\n원인: {e!r}"
@@ -172,6 +199,9 @@ class VisualAISearchWithProgress(QtCore.QObject):
         try:
             np.save(self.data_path_npy, self.image_paths)
         except Exception as e:
+            self.logger.error(
+                f"[VisualAI] 경로 목록 저장 실패: {self.data_path_npy}\n원인: {e!r}"
+            )
             raise RuntimeError(
                 f"경로 목록 저장 실패: '{self.data_path_npy}'\n"
                 f"루트: '{self.data_dir}'\n원인: {e!r}"
@@ -209,8 +239,9 @@ class VisualAISearchWithProgress(QtCore.QObject):
             try:
                 vectors.append(self.extract_image_feature(f))
                 names.append(str(f.relative_to(self.data_dir)))  # ✅ 상대경로
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.error(f"[VisualAI] 이미지 추출 실패: {f}\n원인: {e!r}")
+
             if progress:
                 pct = i * 100.0 / total
                 progress(pct, i, total)
@@ -219,6 +250,7 @@ class VisualAISearchWithProgress(QtCore.QObject):
             self.progress_cb(100.0, total, total)
 
         if not vectors:
+            self.logger.warning("[VisualAI] No new images found for indexing.")
             return 0
 
         X = np.vstack(vectors).astype("float32")
