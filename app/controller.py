@@ -13,6 +13,23 @@ from app.search.worker import AutoIndexWorker, CancelToken, InitIndexWorker
 from app.ui.settings import SettingsDialog
 
 
+LOCAL_BASE = (
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+    / "ClipFAISS"
+)
+LOG_DIR = LOCAL_BASE / "logs"
+LOG_FILE = LOG_DIR / "controller.log"
+
+logging.basicConfig(
+    level=logging.DEBUG,  # DEBUG/INFO/WARNING/ERROR
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+
+
 class AppController(QtCore.QObject):
     """비즈니스 로직: 인덱싱/검색/감시 + UI 연결"""
 
@@ -166,7 +183,7 @@ class AppController(QtCore.QObject):
             QtWidgets.QToolTip.showText(
                 QtGui.QCursor.pos(), f"신규 {added_or_total}개 반영"
             )
-            self.ui.set_progress(100.0, 0, 0)
+            self.ui.set_progress(100.0, added_or_total, added_or_total)
 
     @QtCore.Slot(str)
     def _on_error_token(self, msg: str):
@@ -343,7 +360,7 @@ class AppController(QtCore.QObject):
             QtWidgets.QToolTip.showText(
                 QtGui.QCursor.pos(), f"신규 {added}개 자동 반영 완료"
             )
-        self.ui.set_progress(100.0, 0, 0)
+        self.ui.set_progress(100, added, added)
 
     @QtCore.Slot(str)
     def _on_autoindex_error(self, msg: str):
