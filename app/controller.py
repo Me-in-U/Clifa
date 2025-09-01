@@ -1,15 +1,16 @@
+import logging
 import os
 import sys
 from pathlib import Path
 
 import torch
 from PySide6 import QtCore, QtGui, QtWidgets
+from ultralytics.data.utils import IMG_FORMATS
 from ultralytics.utils.torch_utils import select_device
 
 from app.search.visual_ai import VisualAISearchWithProgress
 from app.search.worker import AutoIndexWorker, CancelToken, InitIndexWorker
 from app.ui.settings import SettingsDialog
-from ultralytics.data.utils import IMG_FORMATS
 
 
 class AppController(QtCore.QObject):
@@ -18,18 +19,43 @@ class AppController(QtCore.QObject):
     def __init__(self, ui):
         super().__init__()
         self.ui = ui
+        self.logger = logging.getLogger("clipfaiss.controller")
         self.pool = QtCore.QThreadPool.globalInstance()
         self.searcher: VisualAISearchWithProgress | None = None
         self.cancel_token = None
         self._indexing_busy = False
         self._autoindex_blocked = False
+
+        # === 공용 QSettings (스코프 고정) ===
+        # SettingsDialog 등 다른 모듈과 반드시 동일 스코프를 사용해야 함
+        self.settings = QtCore.QSettings("ClipFAISS", "ClipFAISS")
+
+        # === 예외 안전 경로 검사 헬퍼 ===
+        def _safe_dir(p: str | Path | None) -> Path | None:
+            if not p:
+                return None
+            try:
+                pp = Path(p)
+                if pp.exists() and pp.is_dir():
+                    return pp
+                return None
+            except OSError as e:
+                # UNC/권한 문제 등으로 exists() 자체가 실패할 수 있음
+                QtCore.qWarning(f"[RootCheck] inaccessible: {p} ({e})")
+                return None
+
         # settings에서 루트 복원
-        st = QtCore.QSettings()
-        root = st.value("last_root_dir", "", type=str)
+        saved = self.settings.value("last_root_dir", "", type=str)
 
         # 기록이 없으면 Pictures 기본값
         default_dir = Path.home() / "Pictures"
-        self.root_path = Path(root) if root and Path(root).exists() else default_dir
+        # 안전하게 후보 결정
+        candidate = _safe_dir(saved) or _safe_dir(default_dir)
+        # 최종 루트(없으면 default를 그냥 사용하되, 부팅 체크에서 다시 유도)
+        self.root_path = candidate or default_dir
+
+        self.logger.debug(f"[QSettings] saved={saved!r}, default={default_dir}")
+        self.logger.debug(f"[Boot] candidate={candidate}, root={self.root_path}")
 
         # 파일 변경 감시 & 디바운스
         self.watcher = QtCore.QFileSystemWatcher(self)
@@ -54,6 +80,13 @@ class AppController(QtCore.QObject):
         self.ui.set_progress(percent, done, total)
 
     def _boot_index_check(self):
+        # === exists()/rglob()도 예외 가능성이 있어 안전 래퍼 사용 ===
+        def _exists_dir(path: Path) -> bool:
+            try:
+                return path.exists() and path.is_dir()
+            except OSError:
+                return False
+
         def _has_images(path: Path) -> bool:
             try:
                 for f in path.rglob("*"):
@@ -64,19 +97,39 @@ class AppController(QtCore.QObject):
             return False
 
         self.ui.set_progress(0.0, 0, 0)
-        # 기본 디렉토리 검증
-        if not self.root_path.exists() or not _has_images(self.root_path):
-            QtWidgets.QMessageBox.information(
-                self.ui,
-                "알림",
-                f"기본 이미지 폴더({self.root_path})가 비어있거나 존재하지 않습니다.\n설정에서 이미지 폴더를 지정하세요.",
+
+        # 기본 디렉토리 검증(접근 불가/이미지 없음)
+        if not _exists_dir(self.root_path) or not _has_images(self.root_path):
+            # 저장값/최종값/사유를 구분해 안내
+            saved = self.settings.value("last_root_dir", "", type=str)
+            reasons: list[str] = []
+            if not _exists_dir(Path(saved)):
+                reasons.append(f"저장된 경로 사용 불가: {saved or '(비어있음)'}")
+            elif not _has_images(Path(saved)):
+                reasons.append(f"저장된 경로에 이미지가 없음: {saved}")
+            if not _exists_dir(self.root_path):
+                reasons.append(f"변경된 경로 접근 불가: {self.root_path}")
+            elif not _has_images(self.root_path):
+                reasons.append(f"변경된 경로에 이미지가 없음: {self.root_path}")
+
+            reasons_text = "\n".join(reasons) if reasons else "확인 불가"
+            msg = (
+                "이미지 폴더 접근/내용 확인에 문제가 있습니다.\n\n"
+                f"- 저장된 경로: {saved or '(없음)'}\n"
+                f"- 최종 선택 경로: {self.root_path}\n\n"
+                f"판단 사유\n {reasons_text}\n\n"
+                "설정에서 이미지 폴더를 지정하세요."
             )
+            self.logger.warning(msg.replace("\n", " "))
+
+            QtWidgets.QMessageBox.information(self.ui, "디렉토리 문제 발생", msg)
             self.ui.set_progress(100.0, 0, 0)  # 스피너 멈춤
             self.open_settings()  # 바로 설정창 열기
             return  # 인덱싱 중단
 
         try:
             device = select_device("0" if torch.cuda.is_available() else "cpu")
+            self.logger.info(f"[Device] Using {device}")
 
             self.searcher = VisualAISearchWithProgress(
                 data=str(self.root_path),
@@ -98,7 +151,9 @@ class AppController(QtCore.QObject):
             self.pool.start(init)
         except Exception as e:
             # 이미지 없음/읽기 실패 같은 경우를 안내
+            self.logger.exception("인덱스 로드/생성 실패")
             QtWidgets.QMessageBox.critical(self.ui, "인덱스 로드/생성 실패", f"{e}\n\n")
+            self.ui.set_progress(100.0, 0, 0)
 
     @QtCore.Slot(float, int, int)
     def _on_progress_token(self, pct: float, done: int, total: int):
@@ -106,6 +161,7 @@ class AppController(QtCore.QObject):
 
     @QtCore.Slot(int)
     def _on_done_token(self, added_or_total: int):
+        self._indexing_busy = False
         if added_or_total > 0:
             QtWidgets.QToolTip.showText(
                 QtGui.QCursor.pos(), f"신규 {added_or_total}개 반영"
@@ -114,6 +170,8 @@ class AppController(QtCore.QObject):
 
     @QtCore.Slot(str)
     def _on_error_token(self, msg: str):
+        self._indexing_busy = False
+        self.logger.error(f"[Index] 에러: {msg}")
         QtWidgets.QMessageBox.critical(self.ui, "인덱싱 실패", msg)
         self.ui.set_progress(100.0, 0, 0)
 
@@ -125,11 +183,21 @@ class AppController(QtCore.QObject):
         except Exception:
             pass
         dirs = {str(root)}
-        for p in root.rglob("*"):
-            if p.is_dir():
-                dirs.add(str(p))
+        # rglob 도중 접근 예외 방어
+        try:
+            for p in root.rglob("*"):
+                try:
+                    if p.is_dir():
+                        dirs.add(str(p))
+                except Exception:
+                    continue
+        except Exception:
+            pass
         if dirs:
-            self.watcher.addPaths(list(dirs))
+            try:
+                self.watcher.addPaths(list(dirs))
+            except Exception:
+                pass
 
     # 변경 이벤트 → 디바운스
     @QtCore.Slot(str)
@@ -176,17 +244,21 @@ class AppController(QtCore.QObject):
             results = self.searcher.search(query, k=k)
             self.ui.set_results(self.root_path, results)
         except Exception as e:
+            self.logger.exception("검색 실패")
             QtWidgets.QMessageBox.critical(self.ui, "검색 실패", str(e))
 
     # 파일 열기
     @QtCore.Slot(str)
     def open_file(self, path: str):
-        if sys.platform.startswith("win"):
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            os.system(f'open "{path}"')
-        else:
-            os.system(f'xdg-open "{path}"')
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                os.system(f'open "{path}"')
+            else:
+                os.system(f'xdg-open "{path}"')
+        except Exception as e:
+            self.logger.error(f"파일 열기 실패: {path} ({e})")
 
     # 설정
     @QtCore.Slot()
@@ -204,6 +276,12 @@ class AppController(QtCore.QObject):
     @QtCore.Slot(str)
     def _on_root_changed(self, new_root: str):
         self.root_path = Path(new_root)
+
+        # 설정값 즉시 저장 (스코프 고정)
+        try:
+            self.settings.setValue("last_root_dir", str(self.root_path))
+        except Exception:
+            pass
 
         # 1) 스피너 보이기
         self.ui.set_progress(0.0, 0, 0)
@@ -244,15 +322,19 @@ class AppController(QtCore.QObject):
                 init.signals.cancelled.connect(self._on_autoindex_cancelled)
                 self.pool.start(init)
             except Exception as e:
+                self.logger.exception("인덱스 재생성 실패")
                 QtWidgets.QMessageBox.critical(self.ui, "인덱스 재생성 실패", str(e))
                 self.ui.set_progress(100.0, 0, 0)
 
-        QtCore.QTimer.singleShot(150, _start)  # 150ms 정도만 지연해도 충분
+        QtCore.QTimer.singleShot(1000, _start)  # 1000ms 정도만 지연해도 충분
 
     @QtCore.Slot()
     def cancel_indexing(self):  # ✅ 취소 API
         if self.cancel_token:
-            self.cancel_token.cancel()
+            try:
+                self.cancel_token.cancel()
+            except Exception:
+                pass
 
     @QtCore.Slot(int)
     def _on_autoindex_done(self, added: int):
@@ -265,6 +347,8 @@ class AppController(QtCore.QObject):
 
     @QtCore.Slot(str)
     def _on_autoindex_error(self, msg: str):
+        self._indexing_busy = False
+        self.logger.error(f"[AutoIndex] 에러: {msg}")
         box = QtWidgets.QMessageBox(self.ui)
         box.setIcon(QtWidgets.QMessageBox.Critical)
         box.setWindowTitle("자동 인덱싱 실패")
