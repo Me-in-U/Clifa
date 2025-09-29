@@ -36,30 +36,86 @@ class PopupWindow(QtWidgets.QWidget):
         self.card.setAttribute(QtCore.Qt.WA_NativeWindow, True)  # 카드에만 아크릴 적용
         self.card.setStyleSheet(
             """
-            /* Apple-esque light glass card */
-            #card { background: rgba(250,250,253,190); border-radius: 14px; }
+            /* Apple-inspired light glass, cleaner controls */
+            #card { background: rgba(250,250,253,180); border-radius: 16px; }
             QLineEdit {
-                padding: 10px 12px; border: 1px solid #d9d9df; border-radius: 10px;
-                font-size: 14px; background: rgba(255,255,255,220); color: #0b0b0f;
+                padding: 10px 14px; border: 1px solid rgba(0,0,0,28); border-radius: 14px;
+                font-size: 14px; background: rgba(255,255,255,235); color: #0b0b0f;
                 selection-background-color: #bcd9ff;
             }
-            QListWidget { background: rgba(245,247,250,210); border-radius: 8px; }
-            QListWidget::item:selected{ background: rgba(188,217,255,180); border-radius:6px; }
-            QListWidget::item{ padding-top:4px; }
-            QPushButton {
-                border-radius: 10px; padding: 8px 12px; background: rgba(255,255,255,230);
-                border: 1px solid #d9d9df; color: #0b0b0f;
+            QLineEdit:focus { border: 1px solid #0a84ff; }
+            QListWidget { background: rgba(246,248,251,210); border-radius: 10px; color: #0b0b0f; }
+            QListWidget::item{ padding-top:4px; border-radius:8px; color: #0b0b0f; }
+            QListWidget::item:hover{ background: rgba(10,132,255,0.08); color: #0b0b0f; }
+            QListWidget::item:selected{ background: rgba(10,132,255,0.16); color: #0b0b0f; }
+            QPushButton { border-radius: 14px; padding: 8px 14px; border: 1px solid rgba(0,0,0,22); background: rgba(255,255,255,235); color: #0b0b0f; }
+            QPushButton:hover  { background: rgba(248,248,250,235); }
+            QPushButton:pressed{ background: rgba(242,243,247,235); }
+            QPushButton#primary { background: #0a84ff; color: white; border: 1px solid #0a84ff; }
+            QPushButton#primary:hover { background: #3393ff; }
+            QPushButton#primary:pressed { background: #0a74df; }
+            QPushButton#iconButton { background: rgba(255,255,255,235); border: 1px solid rgba(0,0,0,18); }
+            QPushButton#iconButton:hover { background: rgba(248,248,250,235); }
+            QPushButton#iconButton:pressed { background: rgba(242,243,247,235); }
+
+            /* Modern thin scrollbars */
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 6px 4px 6px 2px; /* top right bottom left */
+                border: none;
             }
-            QPushButton:hover  { background: rgba(248,248,250,230); }
-            QPushButton:pressed{ background: rgba(240,241,245,230); }
-        """
+            QScrollBar::handle:vertical {
+                background: rgba(0,0,0,70);
+                border-radius: 5px;
+                min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(0,0,0,110);
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical,
+            QScrollBar::up-arrow:vertical,
+            QScrollBar::down-arrow:vertical {
+                height: 0; width: 0; border: none; background: transparent;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 10px;
+                margin: 4px 6px 2px 6px; /* top right bottom left */
+                border: none;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgba(0,0,0,70);
+                border-radius: 5px;
+                min-width: 24px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: rgba(0,0,0,110);
+            }
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal,
+            QScrollBar::left-arrow:horizontal,
+            QScrollBar::right-arrow:horizontal {
+                height: 0; width: 0; border: none; background: transparent;
+            }
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: transparent;
+            }
+            """
         )
 
-        # 미세 그림자로 카드에 깊이감 추가
+        # 카드 그림자
         shadow = QtWidgets.QGraphicsDropShadowEffect(self.card)
-        shadow.setBlurRadius(32)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QtGui.QColor(0, 0, 0, 40))
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 16)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 36))
         self.card.setGraphicsEffect(shadow)
 
         outer = QtWidgets.QVBoxLayout(self)
@@ -78,6 +134,9 @@ class PopupWindow(QtWidgets.QWidget):
         self.list.setUniformItemSizes(True)
         self.list.setWrapping(True)
         self.list.setSpacing(8)
+        # Smooth pixel-based scrolling for modern feel
+        self.list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.list.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.list.setMovement(QtWidgets.QListView.Static)
         self.list.setGridSize(QtCore.QSize(180, 200))  # 초기값, 이후 동적 조정
         self.list.itemDoubleClicked.connect(
@@ -91,8 +150,20 @@ class PopupWindow(QtWidgets.QWidget):
         self.edQuery.setPlaceholderText('예) "a dog sitting on a bench"')
         self.edQuery.returnPressed.connect(self._emit_search)
         self.btnSearch = QtWidgets.QPushButton("검색")
-        self.btnSettings = QtWidgets.QPushButton("⚙")
-        self.btnSettings.setFixedWidth(42)
+        self.btnSearch.setObjectName("primary")
+        self.btnSearch.setMinimumHeight(36)
+        self.btnSearch.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.btnSettings = QtWidgets.QPushButton()
+        self.btnSettings.setObjectName("iconButton")
+        self.btnSettings.setFixedSize(36, 36)
+        self.btnSettings.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        # 설정 아이콘: 왜곡 방지를 위해 정사각 아이콘 크기와 모드 설정
+        settings_icon = QtGui.QIcon(
+            str(Path(__file__).parent / "assets" / "settings.svg")
+        )
+        self.btnSettings.setIcon(settings_icon)
+        self.btnSettings.setIconSize(QtCore.QSize(18, 18))
+        self.btnSettings.setStyleSheet("QPushButton#iconButton { padding: 0; }")
         bottom.addWidget(self.edQuery, 1)
         bottom.addWidget(self.btnSearch)
         bottom.addWidget(self.btnSettings)
@@ -114,9 +185,13 @@ class PopupWindow(QtWidgets.QWidget):
         # 초기 레이아웃이 잡힌 뒤 한번 더 계산
         QtCore.QTimer.singleShot(0, self._recalc_grid)
         self._drag_pos = None
-        # 시스템 폰트 적용(Windows 기준 Segoe UI가 무난)
+
+        # 시스템 폰트 적용(가변 폰트 우선)
         try:
-            self.setFont(QtGui.QFont("Segoe UI", 10))
+            f = QtGui.QFont("Segoe UI Variable", 10)
+            if not QtGui.QFontInfo(f).family():
+                f = QtGui.QFont("Segoe UI", 10)
+            self.setFont(f)
         except Exception:
             pass
 
@@ -176,6 +251,8 @@ class PopupWindow(QtWidgets.QWidget):
                 continue
             icon = QtGui.QIcon(str(fp))
             it = QtWidgets.QListWidgetItem(icon, fp.name)
+            # 파일명 텍스트는 항상 어두운 색으로 고정(흰색 배경에서도 가독성 확보)
+            it.setForeground(QtGui.QBrush(QtGui.QColor("#0b0b0f")))
             it.setToolTip(str(fp))
             it.setData(QtCore.Qt.UserRole, str(fp))
             self.list.addItem(it)
@@ -200,6 +277,8 @@ class PopupWindow(QtWidgets.QWidget):
                 self.overlay.set_busy("검색 중…")
                 self.overlay.show()
             self.request_search.emit(q, 30)
+
+    # (디밍 기능 제거)
 
     # 내부: 5열 그리드 계산
     def _recalc_grid(self):
