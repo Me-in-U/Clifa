@@ -10,6 +10,19 @@ import textwrap
 from pathlib import Path
 import io
 import datetime
+import threading
+import time
+import queue
+
+# 설치 진행 표시용(초기 venv/pip 단계에서 PySide가 없을 수 있으므로 Tk 사용)
+try:
+    import tkinter as _tk
+    from tkinter import ttk as _ttk
+    from tkinter import scrolledtext as _scrolled
+except Exception:  # 런타임에 사용 불가 시, 콘솔/로그만 사용
+    _tk = None
+    _ttk = None
+    _scrolled = None
 
 # -----------------------------
 # PyInstaller / 일반 실행 구분
@@ -72,6 +85,133 @@ def log(msg: str):
         f.write(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
 
 
+# -----------------------------
+# 간단 설치 스플래시(UI)
+# -----------------------------
+class _InstallerUI:
+    """Tk 기반의 아주 단순한 설치 진행 창.
+
+    - 단계 텍스트와 로그를 표시
+    - 콘솔 창 없이도 사용자에게 진행 상황을 알려줌
+    """
+
+    def __init__(self, total_steps: int = 5):
+        self.total_steps = total_steps
+        self._step = 0
+        self._q: "queue.Queue[tuple[str,str]]" = queue.Queue()
+        self._root = None
+        self._phase_label = None
+        self._progress = None
+        self._log = None
+        self._closed = threading.Event()
+
+        if _tk is None:
+            return  # UI 불가 환경
+
+        self._root = _tk.Tk()
+        self._root.title("Clifa 설치 준비 중…")
+        self._root.geometry("520x360")
+        self._root.attributes("-topmost", True)
+        try:
+            self._root.iconify()
+            self._root.deiconify()
+        except Exception:
+            pass
+
+        frm = _tk.Frame(self._root)
+        frm.pack(fill=_tk.BOTH, expand=True, padx=12, pady=12)
+
+        title = _tk.Label(frm, text="실행 준비 중", font=("Segoe UI", 12, "bold"))
+        title.pack(anchor="w")
+
+        self._phase_label = _tk.Label(
+            frm,
+            text="단계 준비…",
+            font=("Segoe UI", 10),
+            justify=_tk.LEFT,
+            wraplength=480,
+        )
+        self._phase_label.pack(anchor="w", pady=(6, 8))
+
+        self._progress = _ttk.Progressbar(
+            frm, mode="determinate", maximum=self.total_steps
+        )
+        self._progress.pack(fill=_tk.X)
+
+        hint = _tk.Label(
+            frm,
+            text=(
+                "프로그램 실행시 가상환경/패키지 설치로 수 분 소요될 수 있어요.\n"
+                f"로그 파일: {LOG_FILE}"
+            ),
+            font=("Segoe UI", 9),
+            justify=_tk.LEFT,
+        )
+        hint.pack(anchor="w", pady=(6, 4))
+
+        self._log = _scrolled.ScrolledText(frm, height=10, font=("Consolas", 9))
+        self._log.pack(fill=_tk.BOTH, expand=True)
+        self._log.insert("end", "설치 로그가 여기에 표시됩니다…\n")
+        self._log.configure(state="disabled")
+
+        # 주기적으로 큐 폴링
+        self._root.after(80, self._drain)
+
+        # 닫기 요청은 무시(강제 종료 방지)
+        def _on_close():
+            pass
+
+        self._root.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def start_loop(self):
+        if self._root is not None:
+            try:
+                self._root.mainloop()
+            finally:
+                self._closed.set()
+
+    def close(self):
+        if self._root is not None:
+            try:
+                self._root.destroy()
+            except Exception:
+                pass
+        self._closed.set()
+
+    # --- 스레드-안전 API (내부적으로 큐에 적재) ---
+    def set_phase(self, text: str, step: int | None = None):
+        if step is not None:
+            self._step = max(self._step, step)
+        self._q.put(("phase", text))
+
+    def append_log(self, text: str):
+        # 지나치게 긴 줄은 줄이기
+        if len(text) > 4000:
+            text = text[:4000] + "…\n"
+        self._q.put(("log", text))
+
+    def _drain(self):
+        # UI 스레드에서 큐 비우기
+        try:
+            while True:
+                typ, payload = self._q.get_nowait()
+                if typ == "phase" and self._phase_label is not None:
+                    self._phase_label.config(
+                        text=f"[{self._step}/{self.total_steps}] {payload}"
+                    )
+                    if self._progress is not None:
+                        self._progress["value"] = min(self.total_steps, self._step)
+                elif typ == "log" and self._log is not None:
+                    self._log.configure(state="normal")
+                    self._log.insert("end", payload)
+                    self._log.see("end")
+                    self._log.configure(state="disabled")
+        except queue.Empty:
+            pass
+        if self._root is not None:
+            self._root.after(120, self._drain)
+
+
 def dump_env():
     log(f"FROZEN={FROZEN}, HERE={HERE}")
     log(f"PYTHON={venv_python() if VENV_DIR.exists() else sys.executable}")
@@ -93,7 +233,7 @@ def show_error_box(title, body):
         print(title, body)
 
 
-def run(cmd, cwd=None, env=None, check=True, hide_window=False):
+def run(cmd, cwd=None, env=None, check=True, hide_window=False, stream=None):
     ensure_log()
     log(f"RUN: {cmd} (cwd={cwd}, hide_window={hide_window})")
     try:
@@ -119,6 +259,11 @@ def run(cmd, cwd=None, env=None, check=True, hide_window=False):
         with open(LOG_FILE, "a", encoding="utf-8", newline="") as f:
             for line in proc.stdout:
                 f.write(line)
+                if stream:
+                    try:
+                        stream(line)
+                    except Exception:
+                        pass
         rc = proc.wait()
         log(f"EXIT CODE: {rc}")
         if check and rc != 0:
@@ -159,7 +304,7 @@ def create_venv():
     # 사용자가 3.11이 없을 수 있으니 3.11 -> 3.10 순으로 시도, 둘 다 없으면 현재 파이썬
     def try_py(tag: str) -> bool:
         try:
-            run(["py", f"-{tag}", "-m", "venv", str(VENV_DIR)])
+            run(["py", f"-{tag}", "-m", "venv", str(VENV_DIR)], hide_window=True)
             return True
         except Exception:
             return False
@@ -170,7 +315,7 @@ def create_venv():
 
     if not ok:
         # Windows py 런처가 없거나 지정 버전이 없을 때: 현재 파이썬으로 시도
-        run([sys.executable, "-m", "venv", str(VENV_DIR)])
+        run([sys.executable, "-m", "venv", str(VENV_DIR)], hide_window=True)
 
     # venv pip 최신화
     run(
@@ -183,7 +328,8 @@ def create_venv():
             "pip",
             "setuptools",
             "wheel",
-        ]
+        ],
+        hide_window=True,
     )
 
 
@@ -211,7 +357,7 @@ def detect_nvidia():
         return None
 
 
-def choose_torch_index_url():
+def choose_torch_index_url(ui: _InstallerUI | None = None):
     log("choosing torch index url …")
     """
     가능한 CUDA 버전을 높은 순서로 시도.
@@ -232,7 +378,10 @@ def choose_torch_index_url():
     # GPU가 보여도 특정 버전이 안 맞을 수 있어 위에서부터 순차 시도
     for tag, url in candidates:
         try:
-            print(f"Trying PyTorch with {tag} …")
+            msg = f"PyTorch {tag} 시도 중…"
+            print(msg)
+            if ui:
+                ui.set_phase(msg, step=3)
             run(
                 venv_pip()
                 + [
@@ -243,13 +392,17 @@ def choose_torch_index_url():
                     "torchaudio",
                     "--index-url",
                     url,
-                ]
+                ],
+                hide_window=True,
+                stream=(ui.append_log if ui else None),
             )
             return tag, url
         except subprocess.CalledProcessError:
             continue
     # 모두 실패 → CPU
     log("Falling back to CPU PyTorch …")
+    if ui:
+        ui.set_phase("PyTorch CPU 설치로 대체", step=3)
     run(
         venv_pip()
         + [
@@ -260,18 +413,30 @@ def choose_torch_index_url():
             "torchaudio",
             "--index-url",
             "https://download.pytorch.org/whl/cpu",
-        ]
+        ],
+        hide_window=True,
+        stream=(ui.append_log if ui else None),
     )
     return "cpu", "https://download.pytorch.org/whl/cpu"
 
 
-def pip_install_requirements(req_file: Path):
+def pip_install_requirements(req_file: Path, ui: _InstallerUI | None = None):
     log(f"pip install -r {req_file}")
     # 기본 requirements 설치
-    run(venv_pip() + ["install", "-r", str(req_file)])
+    if ui:
+        ui.set_phase("기타 패키지 설치", step=4)
+    run(
+        venv_pip() + ["install", "-r", str(req_file)],
+        hide_window=True,
+        stream=(ui.append_log if ui else None),
+    )
     # Ultralytics가 요구하는 clip가 빠진 경우 대비(사전 설치)
     try:
-        run(venv_pip() + ["install", "git+https://github.com/ultralytics/CLIP.git"])
+        run(
+            venv_pip() + ["install", "git+https://github.com/ultralytics/CLIP.git"],
+            hide_window=True,
+            stream=(ui.append_log if ui else None),
+        )
     except subprocess.CalledProcessError:
         # 네트워크/권한 이슈가 있을 수 있으니 치명적 실패로 보지 않고 경고만
         print(
@@ -327,15 +492,33 @@ def stage_sources():
     (APP_DIR / "__init__.py").touch(exist_ok=True)
 
 
-def start_app():
+def start_app(detach: bool = True):
     export_runtime_env()
-    entry = APP_DIR / "main.py"
-    if not entry.exists():
-        raise SystemExit("Bundled main.py not found inside the exe.")
-    # GUI는 pythonw + 콘솔 숨김
+    # app 패키지로 모듈 실행해야 내부 import(app.*)가 올바르게 동작
     cmd = [venv_pythonw(), "-m", "app.main"]
     log(f"start_app (module): {' '.join(cmd)}  cwd={LOCAL_BASE}")
-    run(cmd, cwd=str(LOCAL_BASE), hide_window=True)
+    if detach:
+        # 백그라운드로 앱 시작 후 즉시 리턴
+        creationflags = 0
+        startupinfo = None
+        if os.name == "nt":
+            creationflags = subprocess.CREATE_NO_WINDOW | getattr(
+                subprocess, "DETACHED_PROCESS", 0
+            )
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(LOCAL_BASE),
+            env=os.environ.copy(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+        return proc
+    else:
+        return run(cmd, cwd=str(LOCAL_BASE), hide_window=True)
 
 
 def main():
@@ -343,24 +526,100 @@ def main():
     log("===== ClipFAISS Launcher start =====")
     dump_env()
 
-    # 1) venv 준비
-    create_venv()
+    # 스플래시 준비(UI 비사용 모드면 None)
+    use_ui = os.environ.get("CLIPFAISS_NO_SPLASH", "0") != "1"
+    ui = _InstallerUI(total_steps=5) if use_ui else None
 
-    # 2) 번들된 requirements.txt를 사용자 로컬에 복사
-    #    (pip가 파일 경로를 요구하므로 임시로 로컬 복사본을 만들어 사용)
-    req_target = LOCAL_BASE / "requirements.txt"
-    write_bundled_file(BUNDLED_REQS, req_target)
+    def _work():
+        try:
+            # 1) venv 준비
+            if ui:
+                ui.set_phase("가상환경(.venv) 생성/준비", step=1)
+            create_venv()
 
-    stage_sources()
+            # 2) 번들된 파일 스테이징
+            if ui:
+                ui.set_phase("앱 파일 준비", step=2)
+            req_target = LOCAL_BASE / "requirements.txt"
+            write_bundled_file(BUNDLED_REQS, req_target)
+            stage_sources()
 
-    # 3) PyTorch(CUDA/CPU) 선택 설치
-    choose_torch_index_url()
+            # 3) PyTorch 설치(환경 자동 선택)
+            choose_torch_index_url(ui)
 
-    # 4) 그 외 requirements 설치 + ultralytics/CLIP 사전 설치
-    pip_install_requirements(req_target)
+            # 4) 기타 requirements 설치
+            pip_install_requirements(req_target, ui)
 
-    # 5) 앱 실행
-    start_app()
+            # 5) 앱 실행(백그라운드)
+            if ui:
+                ui.set_phase("앱 시작", step=5)
+            proc = start_app(detach=True)
+
+            # 헬스체크: 1) 로그 파일이 생기면 즉시 성공
+            #          2) 그렇지 않더라도 프로세스가 일정 시간 생존하면 성공으로 간주
+            ctrl_log = LOG_DIR / "controller.log"
+            alive_deadline = time.time() + 12.0  # 최대 12초 관찰
+            ok = False
+            while time.time() < alive_deadline:
+                # 로그가 생겼으면 성공
+                try:
+                    if ctrl_log.exists() and ctrl_log.stat().st_size > 0:
+                        ok = True
+                        break
+                except Exception:
+                    pass
+                # 프로세스가 이미 종료되었으면 실패 가능성 높음 → 즉시 탈출
+                try:
+                    if proc and proc.poll() is not None:
+                        ok = False
+                        break
+                except Exception:
+                    # 핸들 확인 실패 시, 다음 루프로
+                    pass
+                if ui:
+                    ui.append_log(".")
+                time.sleep(0.5)
+
+            # 루프 종료 후에도 프로세스가 계속 살아있으면 성공 처리
+            if not ok:
+                try:
+                    if proc and proc.poll() is None:
+                        ok = True
+                except Exception:
+                    pass
+
+            if not ok:
+                msg = (
+                    "앱이 시작되지 않았습니다. 설치는 완료되었지만 실행 중 오류가 발생했을 수 있습니다.\n\n"
+                    f"로그를 확인해 주세요:\n- 런처: {LOG_FILE}\n- 앱: {ctrl_log}"
+                )
+                show_error_box("ClipFAISS 실행 확인", msg)
+        except subprocess.CalledProcessError as e:
+            msg = textwrap.dedent(
+                f"""
+                설치/실행 중 오류가 발생했습니다. (exit {e.returncode})
+
+                CMD: {' '.join(map(str, e.cmd))}
+
+                네트워크 또는 프록시 환경을 확인한 뒤 다시 시도해주세요.
+                자세한 내용은 로그를 확인하세요.\n{LOG_FILE}
+                """
+            ).strip()
+            show_error_box("ClipFAISS Launcher", msg)
+            if ui:
+                ui.append_log("\n" + msg + "\n")
+            raise
+        finally:
+            # UI 닫기
+            if ui:
+                ui.close()
+
+    if ui:
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+        ui.start_loop()
+    else:
+        _work()
 
 
 if __name__ == "__main__":

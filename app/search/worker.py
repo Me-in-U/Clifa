@@ -87,3 +87,29 @@ class InitIndexWorker(QtCore.QRunnable):
             import traceback
 
             self.signals.error.emit(traceback.format_exc())
+
+
+class SearchWorkerSignals(QtCore.QObject):
+    results = QtCore.Signal(list)  # List[str]
+    error = QtCore.Signal(str)
+
+
+class SearchWorker(QtCore.QRunnable):
+    """텍스트 검색을 백그라운드에서 수행."""
+
+    def __init__(self, searcher, query: str, k: int = 30):
+        super().__init__()
+        self.searcher = searcher
+        self.query = query
+        self.k = k
+        self.signals = SearchWorkerSignals()
+
+    @QtCore.Slot()
+    def run(self):
+        try:
+            results = self.searcher.search(self.query, k=self.k)
+            self.signals.results.emit(results)
+        except Exception:
+            import traceback
+
+            self.signals.error.emit(traceback.format_exc())

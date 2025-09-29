@@ -36,20 +36,87 @@ class PopupWindow(QtWidgets.QWidget):
         self.card.setAttribute(QtCore.Qt.WA_NativeWindow, True)  # 카드에만 아크릴 적용
         self.card.setStyleSheet(
             """
-            #card { background: rgba(255,255,255,180); border-radius: 14px; }
+            /* Apple-inspired light glass, cleaner controls */
+            #card { background: rgba(250,250,253,180); border-radius: 16px; }
             QLineEdit {
-                padding: 10px 12px; border: 1px solid #d0d0d0; border-radius: 10px;
-                font-size: 14px; background: rgba(20,20,20,210); color: #e9eef3;
+                padding: 10px 14px; border: 1px solid rgba(0,0,0,28); border-radius: 14px;
+                font-size: 14px; background: rgba(255,255,255,235); color: #0b0b0f;
+                selection-background-color: #bcd9ff;
             }
-            QListWidget { background: rgba(30,30,30,180); border-radius: 8px; }
-            QPushButton {
-                border-radius: 10px; padding: 8px 12px; background: rgba(240,241,245,210);
-                border: 1px solid #d0d0d0;
+            QLineEdit:focus { border: 1px solid #0a84ff; }
+            QListWidget { background: rgba(246,248,251,210); border-radius: 10px; color: #0b0b0f; }
+            QListWidget::item{ padding-top:4px; border-radius:8px; color: #0b0b0f; }
+            QListWidget::item:hover{ background: rgba(10,132,255,0.08); color: #0b0b0f; }
+            QListWidget::item:selected{ background: rgba(10,132,255,0.16); color: #0b0b0f; }
+            QPushButton { border-radius: 14px; padding: 8px 14px; border: 1px solid rgba(0,0,0,22); background: rgba(255,255,255,235); color: #0b0b0f; }
+            QPushButton:hover  { background: rgba(248,248,250,235); }
+            QPushButton:pressed{ background: rgba(242,243,247,235); }
+            QPushButton#primary { background: #0a84ff; color: white; border: 1px solid #0a84ff; }
+            QPushButton#primary:hover { background: #3393ff; }
+            QPushButton#primary:pressed { background: #0a74df; }
+            QPushButton#iconButton { background: rgba(255,255,255,235); border: 1px solid rgba(0,0,0,18); }
+            QPushButton#iconButton:hover { background: rgba(248,248,250,235); }
+            QPushButton#iconButton:pressed { background: rgba(242,243,247,235); }
+
+            /* Modern thin scrollbars */
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 6px 4px 6px 2px; /* top right bottom left */
+                border: none;
             }
-            QPushButton:hover  { background: rgba(230,232,237,210); }
-            QPushButton:pressed{ background: rgba(220,223,230,210); }
-        """
+            QScrollBar::handle:vertical {
+                background: rgba(0,0,0,70);
+                border-radius: 5px;
+                min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(0,0,0,110);
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical,
+            QScrollBar::up-arrow:vertical,
+            QScrollBar::down-arrow:vertical {
+                height: 0; width: 0; border: none; background: transparent;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+
+            QScrollBar:horizontal {
+                background: transparent;
+                height: 10px;
+                margin: 4px 6px 2px 6px; /* top right bottom left */
+                border: none;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgba(0,0,0,70);
+                border-radius: 5px;
+                min-width: 24px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: rgba(0,0,0,110);
+            }
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal,
+            QScrollBar::left-arrow:horizontal,
+            QScrollBar::right-arrow:horizontal {
+                height: 0; width: 0; border: none; background: transparent;
+            }
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: transparent;
+            }
+            """
         )
+
+        # 카드 그림자
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 16)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 36))
+        self.card.setGraphicsEffect(shadow)
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -62,11 +129,16 @@ class PopupWindow(QtWidgets.QWidget):
         # 결과 그리드
         self.list = QtWidgets.QListWidget()
         self.list.setViewMode(QtWidgets.QListView.IconMode)
-        self.list.setIconSize(QtCore.QSize(160, 160))
+        self.list.setIconSize(QtCore.QSize(160, 160))  # 초기값, 이후 동적 조정
         self.list.setResizeMode(QtWidgets.QListView.Adjust)
         self.list.setUniformItemSizes(True)
         self.list.setWrapping(True)
-        self.list.setGridSize(QtCore.QSize(180, 200))
+        self.list.setSpacing(8)
+        # Smooth pixel-based scrolling for modern feel
+        self.list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.list.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self.list.setMovement(QtWidgets.QListView.Static)
+        self.list.setGridSize(QtCore.QSize(180, 200))  # 초기값, 이후 동적 조정
         self.list.itemDoubleClicked.connect(
             lambda it: self.request_open.emit(it.data(QtCore.Qt.UserRole))
         )
@@ -78,8 +150,20 @@ class PopupWindow(QtWidgets.QWidget):
         self.edQuery.setPlaceholderText('예) "a dog sitting on a bench"')
         self.edQuery.returnPressed.connect(self._emit_search)
         self.btnSearch = QtWidgets.QPushButton("검색")
-        self.btnSettings = QtWidgets.QPushButton("⚙")
-        self.btnSettings.setFixedWidth(42)
+        self.btnSearch.setObjectName("primary")
+        self.btnSearch.setMinimumHeight(36)
+        self.btnSearch.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        self.btnSettings = QtWidgets.QPushButton()
+        self.btnSettings.setObjectName("iconButton")
+        self.btnSettings.setFixedSize(36, 36)
+        self.btnSettings.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        # 설정 아이콘: 왜곡 방지를 위해 정사각 아이콘 크기와 모드 설정
+        settings_icon = QtGui.QIcon(
+            str(Path(__file__).parent / "assets" / "settings.svg")
+        )
+        self.btnSettings.setIcon(settings_icon)
+        self.btnSettings.setIconSize(QtCore.QSize(18, 18))
+        self.btnSettings.setStyleSheet("QPushButton#iconButton { padding: 0; }")
         bottom.addWidget(self.edQuery, 1)
         bottom.addWidget(self.btnSearch)
         bottom.addWidget(self.btnSettings)
@@ -94,8 +178,22 @@ class PopupWindow(QtWidgets.QWidget):
         self.btnSearch.clicked.connect(self._emit_search)
         self.btnSettings.clicked.connect(self.request_settings.emit)
 
+        # 5열 고정
+        self._columns = 5
+
         self.resize(900, 560)
+        # 초기 레이아웃이 잡힌 뒤 한번 더 계산
+        QtCore.QTimer.singleShot(0, self._recalc_grid)
         self._drag_pos = None
+
+        # 시스템 폰트 적용(가변 폰트 우선)
+        try:
+            f = QtGui.QFont("Segoe UI Variable", 10)
+            if not QtGui.QFontInfo(f).family():
+                f = QtGui.QFont("Segoe UI", 10)
+            self.setFont(f)
+        except Exception:
+            pass
 
     # 드래그 이동
     def mousePressEvent(self, e: QtGui.QMouseEvent):
@@ -153,17 +251,61 @@ class PopupWindow(QtWidgets.QWidget):
                 continue
             icon = QtGui.QIcon(str(fp))
             it = QtWidgets.QListWidgetItem(icon, fp.name)
+            # 파일명 텍스트는 항상 어두운 색으로 고정(흰색 배경에서도 가독성 확보)
+            it.setForeground(QtGui.QBrush(QtGui.QColor("#0b0b0f")))
             it.setToolTip(str(fp))
             it.setData(QtCore.Qt.UserRole, str(fp))
             self.list.addItem(it)
+        # 결과 갱신 후에도 5열 유지
+        self._recalc_grid()
+        # 검색 완료 후 오버레이 닫기 (검색은 빠르게 끝나므로 결과 세팅 후 닫음)
+        self.set_progress(100.0, len(results), len(results))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, "overlay"):
             self.overlay.setGeometry(self.card.rect())
+        # 창 크기 변경 시 5열 유지
+        self._recalc_grid()
 
     @QtCore.Slot()
     def _emit_search(self):
         q = self.edQuery.text().strip()
         if q:
+            # 검색 시작: Busy 오버레이 표시
+            if not self.overlay.isVisible():
+                self.overlay.set_busy("검색 중…")
+                self.overlay.show()
             self.request_search.emit(q, 30)
+
+    # (디밍 기능 제거)
+
+    # 내부: 5열 그리드 계산
+    def _recalc_grid(self):
+        try:
+            cols = max(1, int(getattr(self, "_columns", 5)))
+            vp = self.list.viewport()
+            avail = vp.width()
+            if avail <= 0:
+                return
+            # 간격/패딩 계산
+            spacing = self.list.spacing() if hasattr(self.list, "spacing") else 8
+            total_spacing = spacing * (cols - 1)
+
+            # 각 셀 폭 계산
+            cell_w = max(80, (avail - total_spacing) // cols)
+
+            # 아이콘 크기: 셀보다 약간 작게
+            icon_w = max(64, cell_w - 20)
+            icon_h = icon_w
+
+            # 텍스트 공간: 폰트 높이 기준으로 대략 1~2줄 여유
+            fm = self.list.fontMetrics()
+            text_h = fm.height() * 2
+            grid_h = icon_h + text_h + 8  # 약간의 여유 패딩
+
+            self.list.setIconSize(QtCore.QSize(icon_w, icon_h))
+            self.list.setGridSize(QtCore.QSize(cell_w, grid_h))
+        except Exception:
+            # 초기화 타이밍 등으로 인한 예외 무시
+            pass
