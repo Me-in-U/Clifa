@@ -36,20 +36,31 @@ class PopupWindow(QtWidgets.QWidget):
         self.card.setAttribute(QtCore.Qt.WA_NativeWindow, True)  # 카드에만 아크릴 적용
         self.card.setStyleSheet(
             """
-            #card { background: rgba(255,255,255,180); border-radius: 14px; }
+            /* Apple-esque light glass card */
+            #card { background: rgba(250,250,253,190); border-radius: 14px; }
             QLineEdit {
-                padding: 10px 12px; border: 1px solid #d0d0d0; border-radius: 10px;
-                font-size: 14px; background: rgba(20,20,20,210); color: #e9eef3;
+                padding: 10px 12px; border: 1px solid #d9d9df; border-radius: 10px;
+                font-size: 14px; background: rgba(255,255,255,220); color: #0b0b0f;
+                selection-background-color: #bcd9ff;
             }
-            QListWidget { background: rgba(30,30,30,180); border-radius: 8px; }
+            QListWidget { background: rgba(245,247,250,210); border-radius: 8px; }
+            QListWidget::item:selected{ background: rgba(188,217,255,180); border-radius:6px; }
+            QListWidget::item{ padding-top:4px; }
             QPushButton {
-                border-radius: 10px; padding: 8px 12px; background: rgba(240,241,245,210);
-                border: 1px solid #d0d0d0;
+                border-radius: 10px; padding: 8px 12px; background: rgba(255,255,255,230);
+                border: 1px solid #d9d9df; color: #0b0b0f;
             }
-            QPushButton:hover  { background: rgba(230,232,237,210); }
-            QPushButton:pressed{ background: rgba(220,223,230,210); }
+            QPushButton:hover  { background: rgba(248,248,250,230); }
+            QPushButton:pressed{ background: rgba(240,241,245,230); }
         """
         )
+
+        # 미세 그림자로 카드에 깊이감 추가
+        shadow = QtWidgets.QGraphicsDropShadowEffect(self.card)
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QtGui.QColor(0, 0, 0, 40))
+        self.card.setGraphicsEffect(shadow)
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -62,11 +73,13 @@ class PopupWindow(QtWidgets.QWidget):
         # 결과 그리드
         self.list = QtWidgets.QListWidget()
         self.list.setViewMode(QtWidgets.QListView.IconMode)
-        self.list.setIconSize(QtCore.QSize(160, 160))
+        self.list.setIconSize(QtCore.QSize(160, 160))  # 초기값, 이후 동적 조정
         self.list.setResizeMode(QtWidgets.QListView.Adjust)
         self.list.setUniformItemSizes(True)
         self.list.setWrapping(True)
-        self.list.setGridSize(QtCore.QSize(180, 200))
+        self.list.setSpacing(8)
+        self.list.setMovement(QtWidgets.QListView.Static)
+        self.list.setGridSize(QtCore.QSize(180, 200))  # 초기값, 이후 동적 조정
         self.list.itemDoubleClicked.connect(
             lambda it: self.request_open.emit(it.data(QtCore.Qt.UserRole))
         )
@@ -94,8 +107,18 @@ class PopupWindow(QtWidgets.QWidget):
         self.btnSearch.clicked.connect(self._emit_search)
         self.btnSettings.clicked.connect(self.request_settings.emit)
 
+        # 5열 고정
+        self._columns = 5
+
         self.resize(900, 560)
+        # 초기 레이아웃이 잡힌 뒤 한번 더 계산
+        QtCore.QTimer.singleShot(0, self._recalc_grid)
         self._drag_pos = None
+        # 시스템 폰트 적용(Windows 기준 Segoe UI가 무난)
+        try:
+            self.setFont(QtGui.QFont("Segoe UI", 10))
+        except Exception:
+            pass
 
     # 드래그 이동
     def mousePressEvent(self, e: QtGui.QMouseEvent):
@@ -156,14 +179,54 @@ class PopupWindow(QtWidgets.QWidget):
             it.setToolTip(str(fp))
             it.setData(QtCore.Qt.UserRole, str(fp))
             self.list.addItem(it)
+        # 결과 갱신 후에도 5열 유지
+        self._recalc_grid()
+        # 검색 완료 후 오버레이 닫기 (검색은 빠르게 끝나므로 결과 세팅 후 닫음)
+        self.set_progress(100.0, len(results), len(results))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, "overlay"):
             self.overlay.setGeometry(self.card.rect())
+        # 창 크기 변경 시 5열 유지
+        self._recalc_grid()
 
     @QtCore.Slot()
     def _emit_search(self):
         q = self.edQuery.text().strip()
         if q:
+            # 검색 시작: Busy 오버레이 표시
+            if not self.overlay.isVisible():
+                self.overlay.set_busy("검색 중…")
+                self.overlay.show()
             self.request_search.emit(q, 30)
+
+    # 내부: 5열 그리드 계산
+    def _recalc_grid(self):
+        try:
+            cols = max(1, int(getattr(self, "_columns", 5)))
+            vp = self.list.viewport()
+            avail = vp.width()
+            if avail <= 0:
+                return
+            # 간격/패딩 계산
+            spacing = self.list.spacing() if hasattr(self.list, "spacing") else 8
+            total_spacing = spacing * (cols - 1)
+
+            # 각 셀 폭 계산
+            cell_w = max(80, (avail - total_spacing) // cols)
+
+            # 아이콘 크기: 셀보다 약간 작게
+            icon_w = max(64, cell_w - 20)
+            icon_h = icon_w
+
+            # 텍스트 공간: 폰트 높이 기준으로 대략 1~2줄 여유
+            fm = self.list.fontMetrics()
+            text_h = fm.height() * 2
+            grid_h = icon_h + text_h + 8  # 약간의 여유 패딩
+
+            self.list.setIconSize(QtCore.QSize(icon_w, icon_h))
+            self.list.setGridSize(QtCore.QSize(cell_w, grid_h))
+        except Exception:
+            # 초기화 타이밍 등으로 인한 예외 무시
+            pass

@@ -9,7 +9,12 @@ from ultralytics.data.utils import IMG_FORMATS
 from ultralytics.utils.torch_utils import select_device
 
 from app.search.visual_ai import VisualAISearchWithProgress
-from app.search.worker import AutoIndexWorker, CancelToken, InitIndexWorker
+from app.search.worker import (
+    AutoIndexWorker,
+    CancelToken,
+    InitIndexWorker,
+    SearchWorker,
+)
 from app.ui.settings import SettingsDialog
 
 
@@ -42,6 +47,8 @@ class AppController(QtCore.QObject):
         self.cancel_token = None
         self._indexing_busy = False
         self._autoindex_blocked = False
+        self._active_search_worker = None
+        self._search_watchdog = None
 
         # === 공용 QSettings (스코프 고정) ===
         # SettingsDialog 등 다른 모듈과 반드시 동일 스코프를 사용해야 함
@@ -256,13 +263,74 @@ class AppController(QtCore.QObject):
             QtWidgets.QMessageBox.warning(
                 self.ui, "경고", "인덱싱이 완료되지 않았습니다."
             )
+            # 오버레이 안전 종료
+            try:
+                self.ui.set_progress(100.0, 0, 0)
+            except Exception:
+                pass
             return
+        # 이전 검색이 진행 중이면 무시(원하면 취소 로직으로 확장 가능)
+        if self._active_search_worker is not None:
+            QtWidgets.QToolTip.showText(
+                QtGui.QCursor.pos(), "이전 검색이 아직 진행 중입니다…"
+            )
+            return
+
+        # UI는 busy 오버레이가 이미 표시됨. 워커에서 검색 수행
+        worker = SearchWorker(self.searcher, query, k)
+
+        def _on_results(results):
+            try:
+                self.ui.set_results(self.root_path, results)
+            finally:
+                self._clear_search_state()
+
+        worker.signals.results.connect(_on_results)
+        worker.signals.error.connect(self._on_search_error)
+
+        # 참조 유지(garbage collection 방지)
+        self._active_search_worker = worker
+        self.pool.start(worker)
+
+        # 워치독: 60초 초과 시 오버레이 종료 + 안내
+        self._search_watchdog = QtCore.QTimer(self)
+        self._search_watchdog.setSingleShot(True)
+        self._search_watchdog.setInterval(60000)
+        self._search_watchdog.timeout.connect(self._on_search_timeout)
+        self._search_watchdog.start()
+
+    def _clear_search_state(self):
+        # 워커 참조와 워치독 정리
+        self._active_search_worker = None
+        if self._search_watchdog:
+            try:
+                self._search_watchdog.stop()
+            except Exception:
+                pass
+            self._search_watchdog = None
+
+    @QtCore.Slot(str)
+    def _on_search_error(self, msg: str):
+        self.logger.error(f"[Search] 에러: {msg}")
+        QtWidgets.QMessageBox.critical(self.ui, "검색 실패", msg)
+        # 안전하게 오버레이 종료
+        self.ui.set_progress(100.0, 0, 0)
+        self._clear_search_state()
+
+    @QtCore.Slot()
+    def _on_search_timeout(self):
+        # 과도한 지연(모델 다운로드/디바이스 초기화 등) 시 사용자 안내
+        self.logger.warning("[Search] 워치독 타임아웃 - 오버레이 종료")
         try:
-            results = self.searcher.search(query, k=k)
-            self.ui.set_results(self.root_path, results)
-        except Exception as e:
-            self.logger.exception("검색 실패")
-            QtWidgets.QMessageBox.critical(self.ui, "검색 실패", str(e))
+            self.ui.set_progress(100.0, 0, 0)
+        except Exception:
+            pass
+        QtWidgets.QMessageBox.information(
+            self.ui,
+            "검색 지연",
+            "검색이 예상보다 오래 걸립니다.\n처음 실행 시 모델 다운로드 또는 디바이스 초기화가 진행될 수 있습니다.",
+        )
+        self._clear_search_state()
 
     # 파일 열기
     @QtCore.Slot(str)

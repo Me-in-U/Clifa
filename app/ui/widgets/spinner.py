@@ -49,6 +49,9 @@ class SpinnerOverlay(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.hide()
 
+        # 모드: progress | busy
+        self._mode = "progress"
+
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setAlignment(QtCore.Qt.AlignCenter)
@@ -62,7 +65,7 @@ class SpinnerOverlay(QtWidgets.QWidget):
         # 스피너
         self.spinner = Spinner(56, inner)
 
-        # % 라벨
+        # % 라벨 (progress 모드)
         self.lab = QtWidgets.QLabel("0 %", inner)
         self.lab.setStyleSheet(
             "color: rgba(255,255,255,230); font-size: 18px; font-weight: 600;"
@@ -73,6 +76,13 @@ class SpinnerOverlay(QtWidgets.QWidget):
         self.labCount.setStyleSheet(
             "color: rgba(255,255,255,220); font-size: 13px; font-weight: 500;"
         )
+
+        # 메시지 라벨 (busy 모드)
+        self.labMsg = QtWidgets.QLabel("", inner)
+        self.labMsg.setStyleSheet(
+            "color: rgba(255,255,255,235); font-size: 16px; font-weight: 600;"
+        )
+        self.labMsg.hide()
         # 취소 버튼
         self.btnCancel = QtWidgets.QPushButton("취소", inner)
         self.btnCancel.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
@@ -87,6 +97,7 @@ class SpinnerOverlay(QtWidgets.QWidget):
         v.addWidget(self.spinner, 0, QtCore.Qt.AlignHCenter)
         v.addWidget(self.lab, 0, QtCore.Qt.AlignHCenter)
         v.addWidget(self.labCount, 0, QtCore.Qt.AlignHCenter)
+        v.addWidget(self.labMsg, 0, QtCore.Qt.AlignHCenter)
         v.addWidget(self.btnCancel, 0, QtCore.Qt.AlignHCenter)
         lay.addWidget(inner)
 
@@ -109,8 +120,22 @@ class SpinnerOverlay(QtWidgets.QWidget):
     # 한 번에 업데이트
     def set_progress(self, v, done: int, total: int):
         # 퍼센트/카운트 항상 동시에 업데이트
+        self._mode = "progress"
+        self.lab.show()
+        self.labCount.show()
+        self.btnCancel.show()
+        self.labMsg.hide()
         self.set_percent(v)
         self.set_counts(int(done), int(total))
+
+    # Busy 모드: 메시지 표시, 퍼센트/카운트 숨김
+    def set_busy(self, message: str = "작업 중…", show_cancel: bool = False):
+        self._mode = "busy"
+        self.lab.hide()
+        self.labCount.hide()
+        self.labMsg.setText(message or "")
+        self.labMsg.show()
+        self.btnCancel.setVisible(bool(show_cancel))
 
     def paintEvent(self, _):
         p = QtGui.QPainter(self)
