@@ -45,17 +45,7 @@
 
 ### .exe 빌드(파이썬 설치된 환경)
 
-```python
-py -3.10 -m PyInstaller --noconsole --onefile ^
-  --name ClipFAISSLauncher ^
-  --add-data "requirements.txt;." ^
-  --add-data "main.py;." ^
-  --add-data "app;app" ^
-  launch.py
-```
-
-### 빌드 된 exe실행
-
+```구
 - `C:\Users\[User]\AppData\Local\ClipFAISS` 경로에 파이썬 가상환경 및 의존 패키지 자동 설치된 후 자동 실행
 
 ### 처음 실행 시 안내
@@ -90,24 +80,9 @@ py -3.10 -m PyInstaller --noconsole --onefile ^
 - 설치 후 바로 꺼지는 것처럼 보일 때:
   - 실제로는 트레이로 최소화되었을 수 있습니다. 트레이 아이콘을 더블클릭해 열어보세요.
   - 위 로그 파일(특히 `controller.log`)에서 오류 메시지를 확인하세요.
-  - 네트워크 환경(프록시/방화벽) 이슈로 PyTorch 등 대용량 패키지 설치가 지연/실패할 수 있습니다. `launcher.log`의 마지막 부분을 확인하세요.
-- 설치 스플래시를 끄고 싶다면 환경 변수 `CLIPFAISS_NO_SPLASH=1`을 설정 후 실행하세요.
-
-- 번역 기능 관련:
-  - 토글이 비활성화이면 API Key가 비어있을 가능성이 큽니다. 키를 입력해 주세요.
-  - 번역이 너무 오래 걸리거나 실패하면 네트워크/프록시 환경과 OpenAI 쿼터를 확인하세요.
-  - 번역 실패 시에도 검색은 원문으로 진행됩니다.
+  - 네트워크 환경(프록시/방화벽) 요
 
 ---
-
-## 🖼️ 사용 예시
-
-1. 앱 실행 후 이미지 루트 폴더를 지정합니다.
-2. 인덱싱이 완료되면, 검색창에 문장을 입력합니다.
-3. 검색 결과에서 원하는 이미지를 더블클릭하면 열립니다.
-
----
-
 ## 🤝 기여
 
 - 버그 제보, 기능 제안은 [Issues](https://github.com/Me-in-U/Clifa/issues)에서 해주세요.
