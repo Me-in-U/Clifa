@@ -3,4 +3,4 @@ numpy
 Pillow
 ultralytics>=8.2
 faiss-cpu
-openai>=1.40.0
+openai
