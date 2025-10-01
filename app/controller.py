@@ -288,6 +288,18 @@ class AppController(QtCore.QObject):
         worker.signals.results.connect(_on_results)
         worker.signals.error.connect(self._on_search_error)
 
+        # 상태 메시지 수신 → 오버레이 busy 텍스트 반영
+        def _on_status(msg: str):
+            try:
+                if msg and msg.strip():
+                    self.ui.overlay.set_busy(msg.strip())
+                    if not self.ui.overlay.isVisible():
+                        self.ui.overlay.show()
+            except Exception:
+                pass
+
+        worker.signals.status.connect(_on_status)
+
         # 참조 유지(garbage collection 방지)
         self._active_search_worker = worker
         self.pool.start(worker)
