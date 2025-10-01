@@ -17,7 +17,6 @@ from app.search.worker import (
 )
 from app.ui.settings import SettingsDialog
 
-
 LOCAL_BASE = (
     Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
     / "ClipFAISS"

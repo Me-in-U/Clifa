@@ -5,8 +5,8 @@ def enable_windows_blur(widget, acrylic=True, opacity=200, color=(255, 255, 255)
     """Windows 10+ Acrylic/Blur 효과 적용."""
     if sys.platform != "win32":
         return
-    from ctypes import Structure, c_int, c_uint, c_void_p, byref, cast, sizeof, windll
-    from ctypes.wintypes import HWND, BOOL
+    from ctypes import Structure, byref, c_int, c_uint, c_void_p, cast, sizeof, windll
+    from ctypes.wintypes import BOOL, HWND
 
     class ACCENT_POLICY(Structure):
         _fields_ = [

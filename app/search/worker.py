@@ -1,7 +1,4 @@
 from PySide6 import QtCore
-from PySide6 import QtCore
-from PySide6 import QtCore
-from time import monotonic
 
 
 class WorkerSignals(QtCore.QObject):
