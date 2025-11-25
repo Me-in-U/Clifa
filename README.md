@@ -3,7 +3,7 @@
 > **CLIP + FAISS 기반 로컬 이미지 검색기**  
 > 원하는 문장을 입력하면, 이미지 폴더를 인덱싱해 가장 유사한 이미지를 빠르게 찾아줍니다.
 
-<img width="400" alt="image" src="https://github.com/user-attachments/assets/8c14ee31-ed8a-4c20-9f3a-787e664272d4" />
+<img width="400" alt="image" src="https://github.com/user-attachments/assets/b2d0a228-1d07-4d96-b50d-7d22588faa92" />
 
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/ff459700-ab2e-42e1-a3a2-6b6c4186d00f" />
 
