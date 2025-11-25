@@ -3,13 +3,9 @@
 > **CLIP + FAISS 기반 로컬 이미지 검색기**  
 > 원하는 문장을 입력하면, 이미지 폴더를 인덱싱해 가장 유사한 이미지를 빠르게 찾아줍니다.
 
-
 <img width="400" alt="image" src="https://github.com/user-attachments/assets/8c14ee31-ed8a-4c20-9f3a-787e664272d4" />
 
-
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/ff459700-ab2e-42e1-a3a2-6b6c4186d00f" />
-
-
 
 ## ✨ 주요 기능
 
@@ -22,10 +18,11 @@
 
 - 🔍 **텍스트 기반 이미지 검색**
 
-  - 자연어 쿼리로 이미지 찾기 (예: `"a dog sitting on a bench"`)
+  - 자연어 쿼리로 이미지 찾기 (예: `"벤치에 앉아있는 강아지"`, `"a dog sitting on a bench"`)
+  - **50개 이상 언어 지원**: 한국어, 영어, 일본어, 중국어 등 다국어 검색 가능
+  - Sentence-Transformers Multilingual CLIP 모델 사용
   - 검색 결과 썸네일 + 파일명 그리드 표시
   - 더블클릭 시 원본 이미지 열기
-  - (선택) OpenAI 기반 자동 번역 검색: 어떤 언어로 입력해도 영어로 번역 후 검색
 
 - 🎨 **UI/UX**
 
@@ -37,7 +34,7 @@
 - ⚙️ **설정 & 안정성**
   - 이미지 루트 디렉토리 지정 (QSettings 저장)
   - 잘못된 경로나 이미지 없음 감지 시 안내
-  - 로깅 지원 (`LOCALAPPDATA\ClipFAISS\logs`)
+  - 로깅 지원 (`LOCALAPPDATA\Clifa\logs`)
 
 ---
 
@@ -45,34 +42,30 @@
 
 ### .exe 빌드(파이썬 설치된 환경)
 
-- `C:\Users\[User]\AppData\Local\ClipFAISS` 경로에 파이썬 가상환경 및 의존 패키지 자동 설치된 후 자동 실행
+- `C:\Users\[User]\AppData\Local\Clifa` 경로에 파이썬 가상환경 및 의존 패키지 자동 설치된 후 자동 실행
 
 ### 처음 실행 시 안내
 
 - 설치/초기화 동안 콘솔 창 대신 작은 설치 창(스플래시)이 표시됩니다.
-- 단계: 1) 가상환경 생성 → 2) 앱 파일 준비 → 3) PyTorch 설치(CUDA/CPU) → 4) 기타 패키지 → 5) 앱 시작
-- 설치 로그는 실시간으로 스플래시에 표시되며, 파일로도 저장됩니다.
+- 단계: 1) 가상환경 생성 → 2) 앱 파일 준비 → 3) PyTorch 설치(CUDA/CPU) → 4) 기타 패키지 → 5) CLIP 모델 다운로드 → 6) 앱 시작
+- **CLIP 모델 다운로드**: 설치 단계에서 이미지 인코더(clip-ViT-B-32)와 다국어 텍스트 인코더(clip-ViT-B-32-multilingual-v1)를 자동으로 다운로드합니다. 네트워크 속도에 따라 수 분 소요될 수 있습니다.
+- 설치 진행 상황은 체크리스트(⏳ → 🔄 → ✅)로 실시간 표시되며, 로그는 파일로도 저장됩니다.
 - 설치가 끝나면 앱이 트레이로 최소화될 수 있습니다. 트레이 아이콘을 더블클릭하면 창이 열립니다.
 
-### OpenAI 자동 번역 검색 (옵션)
+### 다국어 검색 지원
 
-- 목적: 인덱스가 영어 기준으로 구축되어 있을 때, 한국어 등 비영어 쿼리를 자동으로 영어로 변환해 검색 정확도를 높입니다.
-- 준비물: OpenAI API Key (sk-로 시작). 키가 없으면 해당 기능은 비활성화됩니다.
-- 설정 방법:
-  1. 설정(톱니바퀴) → “검색 번역 (OpenAI)”에서 API Key를 입력합니다.
-  2. “비영어 쿼리를 영어로 자동 번역”을 켭니다.
-  3. 설정은 자동 저장되며, 재실행 후에도 복원됩니다.
-- 동작:
-  - 검색 시작 시 상태 문구가 아래처럼 바뀝니다.
-    - 번역 사용: “번역 중…” → “"{영문 질의}" 로 검색 중…”
-    - 번역 미사용/실패: “검색 중…”
-  - 번역 실패(네트워크/쿼터/키 오류 등) 시 자동으로 원문으로 검색합니다.
-- 보안: API Key는 OS 사용자 로컬 설정(QSettings, 사용자 프로필 내부)에 저장됩니다. 공유 PC에서는 주의하세요.
+- **Multilingual CLIP 모델 사용**: Sentence-Transformers의 `clip-ViT-B-32-multilingual-v1` 모델을 통해 50개 이상 언어를 네이티브 지원합니다.
+- **지원 언어**: 한국어(ko), 일본어(ja), 중국어(zh-cn, zh-tw), 영어(en), 독일어(de), 프랑스어(fr), 스페인어(es) 등
+- **번역 불필요**: 별도 번역 API 없이 한국어, 일본어 등으로 바로 검색 가능합니다.
+- **동작 방식**:
+  - 텍스트 쿼리를 다국어 CLIP 인코더로 임베딩 변환
+  - 이미지 임베딩과의 유사도를 FAISS로 고속 검색
+  - 별도 번역 과정 없이 입력한 언어 그대로 검색
 
 ### 로그 위치
 
-- 런처 설치 로그: `%LOCALAPPDATA%\ClipFAISS\logs\launcher.log`
-- 앱 실행 로그: `%LOCALAPPDATA%\ClipFAISS\logs\controller.log`
+- 런처 설치 로그: `%LOCALAPPDATA%\Clifa\logs\launcher.log`
+- 앱 실행 로그: `%LOCALAPPDATA%\Clifa\logs\controller.log`
 
 ### 문제 해결(Troubleshooting)
 
@@ -82,6 +75,7 @@
   - 네트워크 환경(프록시/방화벽) 요
 
 ---
+
 ## 🤝 기여
 
 - 버그 제보, 기능 제안은 [Issues](https://github.com/Me-in-U/Clifa/issues)에서 해주세요.

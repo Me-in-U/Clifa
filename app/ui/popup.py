@@ -147,7 +147,9 @@ class PopupWindow(QtWidgets.QWidget):
         # 검색 행
         bottom = QtWidgets.QHBoxLayout()
         self.edQuery = QtWidgets.QLineEdit()
-        self.edQuery.setPlaceholderText('예) "a dog sitting on a bench"')
+        self.edQuery.setPlaceholderText(
+            "한국어, 영어, 일본어, 중국어 등 50개 언어 지원"
+        )
         self.edQuery.returnPressed.connect(self._emit_search)
         self.btnSearch = QtWidgets.QPushButton("검색")
         self.btnSearch.setObjectName("primary")

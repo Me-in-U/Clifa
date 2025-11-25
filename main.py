@@ -4,12 +4,12 @@ import os
 import sys
 import traceback
 from pathlib import Path
+
 from PySide6 import QtCore, QtWidgets
 
 # --- 로그/경로 설정 ---
 LOCAL_BASE = (
-    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-    / "ClipFAISS"
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Clifa"
 )
 LOG_DIR = LOCAL_BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,7 +34,7 @@ def _excepthook(etype, value, tb):
     _log_write(txt)
     try:
         QtWidgets.QMessageBox.critical(
-            None, "ClipFAISS", "앱 시작 중 오류가 발생했습니다.\n\n" + str(value)
+            None, "Clifa", "앱 시작 중 오류가 발생했습니다.\n\n" + str(value)
         )
     except Exception:
         pass
@@ -43,9 +43,9 @@ def _excepthook(etype, value, tb):
 sys.excepthook = _excepthook
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # GPU 강제 비활성
-from app.ui.popup import PopupWindow
 from app.controller import AppController
 from app.system.tray import TrayManager
+from app.ui.popup import PopupWindow
 
 
 def main():
@@ -65,7 +65,7 @@ def main():
 
         # 첫 실행(설정된 루트 없음) 시 바로 창을 보여 사용자가 종료된 것으로 오해하지 않도록 함
         try:
-            s = QtCore.QSettings("ClipFAISS", "ClipFAISS")
+            s = QtCore.QSettings("Clifa", "Clifa")
             last_root = s.value("last_root_dir", "", type=str)
             if not last_root:
                 tray.show_window()
@@ -78,7 +78,7 @@ def main():
     except Exception as e:
         _log_write("[FATAL] main() failed: " + repr(e))
         try:
-            QtWidgets.QMessageBox.critical(None, "ClipFAISS", f"앱 시작 실패: {e}")
+            QtWidgets.QMessageBox.critical(None, "Clifa", f"앱 시작 실패: {e}")
         except Exception:
             pass
         raise

@@ -5,8 +5,6 @@ from pathlib import Path
 
 import torch
 from PySide6 import QtCore, QtGui, QtWidgets
-from ultralytics.data.utils import IMG_FORMATS
-from ultralytics.utils.torch_utils import select_device
 
 from app.search.visual_ai import VisualAISearchWithProgress
 from app.search.worker import (
@@ -18,8 +16,7 @@ from app.search.worker import (
 from app.ui.settings import SettingsDialog
 
 LOCAL_BASE = (
-    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-    / "ClipFAISS"
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Clifa"
 )
 LOG_DIR = LOCAL_BASE / "logs"
 LOG_FILE = LOG_DIR / "controller.log"
@@ -40,7 +37,7 @@ class AppController(QtCore.QObject):
     def __init__(self, ui):
         super().__init__()
         self.ui = ui
-        self.logger = logging.getLogger("clipfaiss.controller")
+        self.logger = logging.getLogger("clifa.controller")
         self.pool = QtCore.QThreadPool.globalInstance()
         self.searcher: VisualAISearchWithProgress | None = None
         self.cancel_token = None
@@ -51,7 +48,7 @@ class AppController(QtCore.QObject):
 
         # === 공용 QSettings (스코프 고정) ===
         # SettingsDialog 등 다른 모듈과 반드시 동일 스코프를 사용해야 함
-        self.settings = QtCore.QSettings("ClipFAISS", "ClipFAISS")
+        self.settings = QtCore.QSettings("Clifa", "Clifa")
 
         # === 예외 안전 경로 검사 헬퍼 ===
         def _safe_dir(p: str | Path | None) -> Path | None:
@@ -111,6 +108,18 @@ class AppController(QtCore.QObject):
                 return False
 
         def _has_images(path: Path) -> bool:
+            IMG_FORMATS = {
+                "bmp",
+                "dng",
+                "jpeg",
+                "jpg",
+                "mpo",
+                "png",
+                "tif",
+                "tiff",
+                "webp",
+                "pfm",
+            }
             try:
                 for f in path.rglob("*"):
                     if f.is_file() and f.suffix.lower().lstrip(".") in IMG_FORMATS:
@@ -151,7 +160,7 @@ class AppController(QtCore.QObject):
             return  # 인덱싱 중단
 
         try:
-            device = select_device("0" if torch.cuda.is_available() else "cpu")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
             self.logger.info(f"[Device] Using {device}")
 
             self.searcher = VisualAISearchWithProgress(
@@ -396,7 +405,7 @@ class AppController(QtCore.QObject):
         # 3) 다음 이벤트 루프에서 무거운 초기화 시작 (UI 그려질 시간 확보)
         def _start():
             try:
-                device = select_device("0" if torch.cuda.is_available() else "cpu")
+                device = "cuda" if torch.cuda.is_available() else "cpu"
                 self.searcher = VisualAISearchWithProgress(
                     data=str(self.root_path),
                     device=device,

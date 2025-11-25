@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import datetime
+import io
 import os
-import sys
+import queue
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
-from pathlib import Path
-import io
-import datetime
 import threading
 import time
-import queue
+from pathlib import Path
 
 # 설치 진행 표시용(초기 venv/pip 단계에서 PySide가 없을 수 있으므로 Tk 사용)
 try:
     import tkinter as _tk
-    from tkinter import ttk as _ttk
     from tkinter import scrolledtext as _scrolled
+    from tkinter import ttk as _ttk
 except Exception:  # 런타임에 사용 불가 시, 콘솔/로그만 사용
     _tk = None
     _ttk = None
@@ -37,8 +37,7 @@ BUNDLED_APP = HERE / "app"
 
 # 사용자 LocalAppData 쪽으로 모든 상태를 몰아넣음
 LOCAL_BASE = (
-    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-    / "ClipFAISS"
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Clifa"
 )
 APP_DIR = LOCAL_BASE / "app"
 VENV_DIR = LOCAL_BASE / ".venv"
@@ -50,8 +49,8 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 환경변수: 캐시/인덱스 경로 강제(앱/ultralytics가 참조)
-os.environ.setdefault("CLIPFAISS_HOME", str(LOCAL_BASE))
-os.environ.setdefault("CLIPFAISS_CACHE", str(CACHE_DIR))
+os.environ.setdefault("CLIFA_HOME", str(LOCAL_BASE))
+os.environ.setdefault("CLIFA_CACHE", str(CACHE_DIR))
 # Torch/Ultralytics가 임시 다운로드 하는 경로도 사용자 영역으로
 os.environ.setdefault("TORCH_HOME", str(CACHE_DIR / "torch"))
 os.environ.setdefault("HF_HOME", str(CACHE_DIR / "hf"))
@@ -95,7 +94,7 @@ class _InstallerUI:
     - 콘솔 창 없이도 사용자에게 진행 상황을 알려줌
     """
 
-    def __init__(self, total_steps: int = 5):
+    def __init__(self, total_steps: int = 6):
         self.total_steps = total_steps
         self._step = 0
         self._q: "queue.Queue[tuple[str,str]]" = queue.Queue()
@@ -110,7 +109,7 @@ class _InstallerUI:
 
         self._root = _tk.Tk()
         self._root.title("Clifa 설치 준비 중…")
-        self._root.geometry("520x360")
+        self._root.geometry("640x500")
         self._root.attributes("-topmost", True)
         try:
             self._root.iconify()
@@ -149,7 +148,44 @@ class _InstallerUI:
         )
         hint.pack(anchor="w", pady=(6, 4))
 
-        self._log = _scrolled.ScrolledText(frm, height=10, font=("Consolas", 9))
+        # 체크리스트 프레임
+        checklist_frame = _tk.LabelFrame(
+            frm, text="설치 항목", font=("Segoe UI", 9, "bold")
+        )
+        checklist_frame.pack(fill=_tk.X, pady=(0, 8))
+
+        # 체크리스트 항목들
+        self._checklist_items = {}
+        items = [
+            ("venv", "가상환경 설정"),
+            ("files", "앱 파일 준비"),
+            ("pytorch", "PyTorch 설치"),
+            ("packages", "필수 패키지 설치"),
+            ("models", "CLIP 모델 다운로드"),
+            ("app", "앱 실행"),
+        ]
+
+        for key, label in items:
+            item_frame = _tk.Frame(checklist_frame)
+            item_frame.pack(fill=_tk.X, padx=8, pady=2)
+
+            status_label = _tk.Label(
+                item_frame, text="⏳", font=("Segoe UI", 10), width=2
+            )
+            status_label.pack(side=_tk.LEFT)
+
+            text_label = _tk.Label(
+                item_frame, text=label, font=("Segoe UI", 9), anchor="w"
+            )
+            text_label.pack(side=_tk.LEFT, fill=_tk.X, expand=True)
+
+            self._checklist_items[key] = {
+                "status": status_label,
+                "text": text_label,
+                "state": "pending",  # pending, running, done
+            }
+
+        self._log = _scrolled.ScrolledText(frm, height=12, font=("Consolas", 9))
         self._log.pack(fill=_tk.BOTH, expand=True)
         self._log.insert("end", "설치 로그가 여기에 표시됩니다…\n")
         self._log.configure(state="disabled")
@@ -184,6 +220,12 @@ class _InstallerUI:
             self._step = max(self._step, step)
         self._q.put(("phase", text))
 
+    def update_checklist(self, key: str, state: str):
+        """체크리스트 항목 상태 업데이트
+        state: 'pending' (⏳), 'running' (🔄), 'done' (✅)
+        """
+        self._q.put(("checklist", (key, state)))
+
     def append_log(self, text: str):
         # 지나치게 긴 줄은 줄이기
         if len(text) > 4000:
@@ -192,24 +234,57 @@ class _InstallerUI:
 
     def _drain(self):
         # UI 스레드에서 큐 비우기
+        # UI가 파괴되었는지 확인
+        if self._root is None:
+            return
+
+        try:
+            # 루트 윈도우가 아직 살아있는지 확인
+            self._root.winfo_exists()
+        except _tk.TclError:
+            return
+
         try:
             while True:
                 typ, payload = self._q.get_nowait()
                 if typ == "phase" and self._phase_label is not None:
-                    self._phase_label.config(
-                        text=f"[{self._step}/{self.total_steps}] {payload}"
-                    )
-                    if self._progress is not None:
-                        self._progress["value"] = min(self.total_steps, self._step)
+                    try:
+                        self._phase_label.config(
+                            text=f"[{self._step}/{self.total_steps}] {payload}"
+                        )
+                        if self._progress is not None:
+                            self._progress["value"] = min(self.total_steps, self._step)
+                    except _tk.TclError:
+                        return
+                elif typ == "checklist":
+                    key, state = payload
+                    if key in self._checklist_items:
+                        item = self._checklist_items[key]
+                        item["state"] = state
+                        try:
+                            if state == "pending":
+                                item["status"].config(text="⏳", fg="gray")
+                            elif state == "running":
+                                item["status"].config(text="🔄", fg="blue")
+                            elif state == "done":
+                                item["status"].config(text="✅", fg="green")
+                        except _tk.TclError:
+                            return
                 elif typ == "log" and self._log is not None:
-                    self._log.configure(state="normal")
-                    self._log.insert("end", payload)
-                    self._log.see("end")
-                    self._log.configure(state="disabled")
+                    try:
+                        self._log.configure(state="normal")
+                        self._log.insert("end", payload)
+                        self._log.see("end")
+                        self._log.configure(state="disabled")
+                    except _tk.TclError:
+                        return
         except queue.Empty:
             pass
-        if self._root is not None:
+
+        try:
             self._root.after(120, self._drain)
+        except _tk.TclError:
+            pass
 
 
 def dump_env():
@@ -225,8 +300,8 @@ def dump_env():
 def show_error_box(title, body):
     body = str(body) + f"\n\nLog: {LOG_FILE}"
     try:
-        from ctypes import windll
         import ctypes
+        from ctypes import windll
 
         windll.user32.MessageBoxW(0, body, title, 0x10)
     except Exception:
@@ -293,10 +368,14 @@ def venv_pip() -> list[str]:
     return [venv_python(), "-m", "pip"]
 
 
-def create_venv():
+def create_venv(ui: _InstallerUI | None = None):
     log(f"create_venv: target={VENV_DIR}")
+    if ui:
+        ui.update_checklist("venv", "running")
     if VENV_DIR.exists():
         log("create_venv: already exists")
+        if ui:
+            ui.update_checklist("venv", "done")
         return
     VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
     log(f"venv ready: {VENV_DIR}")
@@ -331,6 +410,8 @@ def create_venv():
         ],
         hide_window=True,
     )
+    if ui:
+        ui.update_checklist("venv", "done")
 
 
 def write_bundled_file(src: Path, dst: Path):
@@ -359,6 +440,8 @@ def detect_nvidia():
 
 def choose_torch_index_url(ui: _InstallerUI | None = None):
     log("choosing torch index url …")
+    if ui:
+        ui.update_checklist("pytorch", "running")
     """
     가능한 CUDA 버전을 높은 순서로 시도.
     성공적으로 인스톨되면 그걸로 유지, 모두 실패하면 CPU로.
@@ -396,6 +479,8 @@ def choose_torch_index_url(ui: _InstallerUI | None = None):
                 hide_window=True,
                 stream=(ui.append_log if ui else None),
             )
+            if ui:
+                ui.update_checklist("pytorch", "done")
             return tag, url
         except subprocess.CalledProcessError:
             continue
@@ -417,11 +502,15 @@ def choose_torch_index_url(ui: _InstallerUI | None = None):
         hide_window=True,
         stream=(ui.append_log if ui else None),
     )
+    if ui:
+        ui.update_checklist("pytorch", "done")
     return "cpu", "https://download.pytorch.org/whl/cpu"
 
 
 def pip_install_requirements(req_file: Path, ui: _InstallerUI | None = None):
     log(f"pip install -r {req_file}")
+    if ui:
+        ui.update_checklist("packages", "running")
     # 기본 requirements 설치
     if ui:
         ui.set_phase("기타 패키지 설치", step=4)
@@ -430,18 +519,46 @@ def pip_install_requirements(req_file: Path, ui: _InstallerUI | None = None):
         hide_window=True,
         stream=(ui.append_log if ui else None),
     )
-    # Ultralytics가 요구하는 clip가 빠진 경우 대비(사전 설치)
+    if ui:
+        ui.update_checklist("packages", "done")
+
+
+def preload_clip_models(ui: _InstallerUI | None = None):
+    """sentence-transformers CLIP 모델 사전 다운로드"""
+    log("Preloading CLIP models...")
+    if ui:
+        ui.update_checklist("models", "running")
+        ui.set_phase("CLIP 모델 다운로드 (이미지 인코더)", step=5)
+
+    # 임시 스크립트로 모델 다운로드
+    script = textwrap.dedent(
+        """
+        import os
+        os.environ['HF_HOME'] = r'{}'
+        from sentence_transformers import SentenceTransformer
+        print('[1/2] 이미지 인코더 다운로드 중...')
+        img_model = SentenceTransformer('clip-ViT-B-32')
+        print('[2/2] 텍스트 인코더 다운로드 중...')
+        text_model = SentenceTransformer('sentence-transformers/clip-ViT-B-32-multilingual-v1')
+        print('모델 다운로드 완료!')
+    """
+    ).format(CACHE_DIR / "hf")
+
     try:
         run(
-            venv_pip() + ["install", "git+https://github.com/ultralytics/CLIP.git"],
+            [venv_python(), "-c", script],
             hide_window=True,
             stream=(ui.append_log if ui else None),
         )
-    except subprocess.CalledProcessError:
-        # 네트워크/권한 이슈가 있을 수 있으니 치명적 실패로 보지 않고 경고만
-        print(
-            "WARNING: failed to preinstall ultralytics CLIP; ultralytics may try to auto-install at runtime."
-        )
+        if ui:
+            ui.update_checklist("models", "done")
+            ui.set_phase("CLIP 모델 다운로드 완료", step=5)
+    except subprocess.CalledProcessError as e:
+        log(f"WARNING: 모델 사전 다운로드 실패: {e}")
+        if ui:
+            ui.append_log(
+                f"\n경고: 모델 사전 다운로드 실패. 첫 실행 시 자동 다운로드됩니다.\n"
+            )
 
 
 def export_runtime_env():
@@ -456,8 +573,8 @@ def export_runtime_env():
     # CUDA 미탐지면 torch 쪽에서 CPU로 떨어지도록 안내 메시지 최소화
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     # 앱에서 읽어 쓸 수 있게
-    os.environ["CLIPFAISS_HOME"] = str(LOCAL_BASE)
-    os.environ["CLIPFAISS_CACHE"] = str(CACHE_DIR)
+    os.environ["CLIFA_HOME"] = str(LOCAL_BASE)
+    os.environ["CLIFA_CACHE"] = str(CACHE_DIR)
 
 
 def copytree_update(src: Path, dst: Path):
@@ -478,9 +595,11 @@ def copytree_update(src: Path, dst: Path):
                 shutil.copy2(s, d)
 
 
-def stage_sources():
+def stage_sources(ui: _InstallerUI | None = None):
     """번들된 main.py, requirements.txt, app/ 를 로컬로 복사/동기화."""
     log("staging bundled sources to LOCALAPPDATA …")
+    if ui:
+        ui.update_checklist("files", "running")
     APP_DIR.mkdir(parents=True, exist_ok=True)
     # app/ 동기화
     if not BUNDLED_APP.exists():
@@ -490,6 +609,8 @@ def stage_sources():
     write_bundled_file(BUNDLED_MAIN, APP_DIR / "main.py")
     write_bundled_file(BUNDLED_REQS, LOCAL_BASE / "requirements.txt")
     (APP_DIR / "__init__.py").touch(exist_ok=True)
+    if ui:
+        ui.update_checklist("files", "done")
 
 
 def start_app(detach: bool = True):
@@ -523,26 +644,26 @@ def start_app(detach: bool = True):
 
 def main():
     ensure_log()
-    log("===== ClipFAISS Launcher start =====")
+    log("===== Clifa Launcher start =====")
     dump_env()
 
     # 스플래시 준비(UI 비사용 모드면 None)
-    use_ui = os.environ.get("CLIPFAISS_NO_SPLASH", "0") != "1"
-    ui = _InstallerUI(total_steps=5) if use_ui else None
+    use_ui = os.environ.get("CLIFA_NO_SPLASH", "0") != "1"
+    ui = _InstallerUI(total_steps=6) if use_ui else None
 
     def _work():
         try:
             # 1) venv 준비
             if ui:
                 ui.set_phase("가상환경(.venv) 생성/준비", step=1)
-            create_venv()
+            create_venv(ui)
 
             # 2) 번들된 파일 스테이징
             if ui:
                 ui.set_phase("앱 파일 준비", step=2)
             req_target = LOCAL_BASE / "requirements.txt"
             write_bundled_file(BUNDLED_REQS, req_target)
-            stage_sources()
+            stage_sources(ui)
 
             # 3) PyTorch 설치(환경 자동 선택)
             choose_torch_index_url(ui)
@@ -550,9 +671,13 @@ def main():
             # 4) 기타 requirements 설치
             pip_install_requirements(req_target, ui)
 
-            # 5) 앱 실행(백그라운드)
+            # 5) CLIP 모델 사전 다운로드
+            preload_clip_models(ui)
+
+            # 6) 앱 실행(백그라운드)
             if ui:
-                ui.set_phase("앱 시작", step=5)
+                ui.update_checklist("app", "running")
+                ui.set_phase("앱 시작", step=6)
             proc = start_app(detach=True)
 
             # 헬스체크: 1) 로그 파일이 생기면 즉시 성공
@@ -565,6 +690,8 @@ def main():
                 try:
                     if ctrl_log.exists() and ctrl_log.stat().st_size > 0:
                         ok = True
+                        if ui:
+                            ui.update_checklist("app", "done")
                         break
                 except Exception:
                     pass
@@ -593,7 +720,7 @@ def main():
                     "앱이 시작되지 않았습니다. 설치는 완료되었지만 실행 중 오류가 발생했을 수 있습니다.\n\n"
                     f"로그를 확인해 주세요:\n- 런처: {LOG_FILE}\n- 앱: {ctrl_log}"
                 )
-                show_error_box("ClipFAISS 실행 확인", msg)
+                show_error_box("Clifa 실행 확인", msg)
         except subprocess.CalledProcessError as e:
             msg = textwrap.dedent(
                 f"""
@@ -605,7 +732,7 @@ def main():
                 자세한 내용은 로그를 확인하세요.\n{LOG_FILE}
                 """
             ).strip()
-            show_error_box("ClipFAISS Launcher", msg)
+            show_error_box("Clifa Launcher", msg)
             if ui:
                 ui.append_log("\n" + msg + "\n")
             raise
@@ -643,7 +770,7 @@ if __name__ == "__main__":
 
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror("ClipFAISS Launcher", msg)
+            messagebox.showerror("Clifa Launcher", msg)
         except Exception:
             pass
         print(msg, file=sys.stderr)

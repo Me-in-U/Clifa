@@ -1,6 +1,7 @@
 PySide6>=6.6
 numpy
 Pillow
-ultralytics>=8.2
+sentence-transformers>=2.2.0
 faiss-cpu
-openai
+torch
+torchvision

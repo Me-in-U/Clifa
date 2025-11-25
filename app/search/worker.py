@@ -107,28 +107,9 @@ class SearchWorker(QtCore.QRunnable):
     @QtCore.Slot()
     def run(self):
         try:
-            # 선택적 번역 적용 (QSettings로 제어)
-            try:
-                from PySide6 import QtCore as _QtCore
-
-                st = _QtCore.QSettings("ClipFAISS", "ClipFAISS")
-                use_trans = bool(st.value("translate_enabled", False, type=bool))
-                api_key = st.value("openai_api_key", "", type=str)
-                q = self.query
-                if use_trans and api_key:
-                    self.signals.status.emit("번역 중…")
-                    from app.search.translator import translate_to_english
-
-                    tq = translate_to_english(self.query, api_key)
-                    if isinstance(tq, str) and tq.strip():
-                        q = tq.strip()
-                # 상태 업데이트: 최종 질의로 검색 진행
-                self.signals.status.emit(f'"{q}" 로 검색 중…')
-                results = self.searcher.search(q, k=self.k)
-            except Exception:
-                # 번역 실패/예외 시 원문으로 검색
-                self.signals.status.emit("검색 중…")
-                results = self.searcher.search(self.query, k=self.k)
+            # 다국어 모델이므로 번역 불필요 - 직접 검색
+            self.signals.status.emit(f'"{self.query}" 검색 중…')
+            results = self.searcher.search(self.query, k=self.k)
             self.signals.results.emit(results)
         except Exception:
             import traceback

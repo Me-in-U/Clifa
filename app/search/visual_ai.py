@@ -11,13 +11,10 @@ import numpy as np
 import torch
 from PIL import Image
 from PySide6 import QtCore
-from ultralytics.nn.text_model import build_text_model
-from ultralytics.utils.checks import check_requirements
-from ultralytics.utils.torch_utils import select_device
+from sentence_transformers import SentenceTransformer
 
 LOCAL_BASE = (
-    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-    / "ClipFAISS"
+    Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Clifa"
 )
 LOG_DIR = LOCAL_BASE / "logs"
 LOG_FILE = LOG_DIR / "visual_ai.log"
@@ -57,7 +54,7 @@ class IndexCancelled(Exception):
 
 
 class VisualAISearchWithProgress(QtCore.QObject):
-    """Ultralytics CLIP + FAISS 기반 시각 검색."""
+    """Sentence-Transformers Multilingual CLIP + FAISS 기반 시각 검색."""
 
     def __init__(
         self,
@@ -67,20 +64,18 @@ class VisualAISearchWithProgress(QtCore.QObject):
         defer_build: bool = False,
     ):
         super().__init__()
-        self.logger = logging.getLogger("clipfaiss.visual_ai")
+        self.logger = logging.getLogger("clifa.visual_ai")
         self.progress_cb = progress_cb
 
         # === 디바이스 선택(자동) ===
-        self.device = device or select_device(
-            "0" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[VisualAI] using device: {self.device}")
         # ==========================
 
-        # ---- (변경) 캐시/인덱스는 %LOCALAPPDATA%\ClipFAISS\indexes\<slug>\* 로 저장
+        # ---- (변경) 캐시/인덱스는 %LOCALAPPDATA%\Clifa\indexes\<slug>\* 로 저장
         # 사용자 폴더 기준
         local = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-        base_cache = local / "ClipFAISS" / "indexes"
+        base_cache = local / "Clifa" / "indexes"
 
         self.data_dir = Path(data).resolve()
         slug = _slugify_path(self.data_dir)  # 루트별 고유 디렉터리
@@ -104,10 +99,11 @@ class VisualAISearchWithProgress(QtCore.QObject):
         self.data_path_npy = str(self.index_dir / "paths.npy")
 
         # deps & model
-        check_requirements("faiss-cpu")
         self.faiss = __import__("faiss")
 
-        self.model = None
+        # Multilingual CLIP 모델 초기화
+        self.img_model = None  # 이미지 인코더 (원본 CLIP)
+        self.text_model = None  # 텍스트 인코더 (다국어 지원)
 
         self.index = None
         self.image_paths = []
@@ -117,15 +113,32 @@ class VisualAISearchWithProgress(QtCore.QObject):
             )  # 즉시 빌드(기본), 지연 모드면 건너뜀
 
     def _ensure_model(self):
-        if self.model is None:
-            self.model = build_text_model("clip:ViT-L/14", device=self.device)
-            try:
-                self.model.model.eval()  # 있으면 eval
-            except Exception:
-                pass
+        """모델을 lazy loading으로 초기화"""
+        if self.img_model is None:
+            self.logger.info("[Model] Loading CLIP image encoder...")
+            self.img_model = SentenceTransformer("clip-ViT-B-32", device=self.device)
+
+        if self.text_model is None:
+            self.logger.info("[Model] Loading multilingual text encoder...")
+            self.text_model = SentenceTransformer(
+                "sentence-transformers/clip-ViT-B-32-multilingual-v1",
+                device=self.device,
+            )
 
     def build_full_index(self, progress_cb=None, cancel_token=None) -> None:
-        from ultralytics.data.utils import IMG_FORMATS
+        # 이미지 파일 확장자 목록
+        IMG_FORMATS = {
+            "bmp",
+            "dng",
+            "jpeg",
+            "jpg",
+            "mpo",
+            "png",
+            "tif",
+            "tiff",
+            "webp",
+            "pfm",
+        }
 
         # 파일 스캔 (하위폴더 포함 권장: rglob)
         files = [
@@ -211,7 +224,19 @@ class VisualAISearchWithProgress(QtCore.QObject):
             progress_cb(100, total, total)
 
     def index_new_files(self, progress_cb=None, cancel_token=None):
-        from ultralytics.data.utils import IMG_FORMATS
+        # 이미지 파일 확장자 목록
+        IMG_FORMATS = {
+            "bmp",
+            "dng",
+            "jpeg",
+            "jpg",
+            "mpo",
+            "png",
+            "tif",
+            "tiff",
+            "webp",
+            "pfm",
+        }
 
         progress = progress_cb or self.progress_cb
         known = (
@@ -274,21 +299,29 @@ class VisualAISearchWithProgress(QtCore.QObject):
         return len(names)
 
     def extract_image_feature(self, path: Path) -> np.ndarray:
+        """이미지 임베딩 추출 (원본 CLIP 이미지 인코더 사용)"""
         self._ensure_model()
         with Image.open(path) as im:
             im = im.convert("RGB")
-            with torch.inference_mode():
-                return self.model.encode_image(im).cpu().numpy()
+            # sentence-transformers는 PIL Image를 직접 받음
+            embedding = self.img_model.encode(im, convert_to_numpy=True)
+            return embedding
 
     def extract_text_feature(self, text: str) -> np.ndarray:
+        """텍스트 임베딩 추출 (다국어 지원)"""
         self._ensure_model()
-        return self.model.encode_text(self.model.tokenize([text])).cpu().numpy()
+        # 다국어 텍스트 인코더 사용
+        embedding = self.text_model.encode(text, convert_to_numpy=True)
+        return embedding
 
     # --- search ---
     def search(
         self, query: str, k: int = 30, similarity_thresh: float = 0.1
     ) -> List[str]:
         text_feat = self.extract_text_feature(query).astype("float32")
+        # FAISS는 2D 배열을 요구하므로 reshape
+        if text_feat.ndim == 1:
+            text_feat = text_feat.reshape(1, -1)
         self.faiss.normalize_L2(text_feat)
         D, I = self.index.search(text_feat, k)
         results = [
